@@ -1,3 +1,4 @@
+use mimesis::mesh::PolygonMesh;
 use std::fs;
 use std::path::Path;
 use image::{RgbaImage, Rgba, Luma, ImageBuffer, GenericImageView};
@@ -86,4 +87,12 @@ fn main() {
     let smooth_result_img = draw_polygons(&smooth_polygons, width, height);
     let smooth_polygon_path = out_dir.join(format!("{}_smooth_polygon.png", asset_name));
     smooth_result_img.save(smooth_polygon_path).expect("Failed to save output");
+    
+    // Create the meshes from the polygons
+    for (i, polygon) in smooth_polygons.iter().enumerate() {
+        let mesh_path = out_dir.join(format!("{}_{}.obj", asset_name, i));
+        let mesh2d = polygon.mesh2d().expect("Failed to create mesh");
+        let mesh3d = mesh2d.extrude(20.0);
+        mesh3d.export_obj(mesh_path.as_path()).unwrap()
+    }
 }

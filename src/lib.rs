@@ -1,7 +1,7 @@
 mod binary_image;
 mod contour;
 mod pixel;
-mod meshing;
+pub mod mesh;
 
 pub use crate::binary_image::BinaryImage;
 
