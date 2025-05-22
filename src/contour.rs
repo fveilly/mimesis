@@ -9,7 +9,7 @@ const MN: [(i8, i8); 8] = [(0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-
 
 impl BinaryImage {
 
-    pub fn trace_polygons(&self) -> Vec<Polygon<i32>> {
+    pub fn trace_polygons(&self) -> Vec<Polygon> {
         let width = self.width() as usize;
         let height = self.height() as usize;
         let mut contours = vec![vec![0i8; width + 2]; height + 2];
@@ -101,15 +101,15 @@ impl BinaryImage {
         vertex: [(i8, i8); 7],
         value: [i8; 7],
         contours: &mut Vec<Vec<i8>>,
-    ) -> LineString<i32> {
+    ) -> LineString {
         let mut tracer_x = cursor_x;
         let mut tracer_y = cursor_y;
         let mut vertices_nbr: usize = 1;
-        let mut ring = Vec::<Coord<i32>>::new();
+        let mut ring = Vec::<Coord>::new();
 
         ring.push(Coord {
-            x: (tracer_x as i32) + (vertex[o[0]].0 as i32),
-            y: (tracer_y as i32) + (vertex[o[0]].1 as i32),
+            x: (tracer_x as f64) + (vertex[o[0]].0 as f64),
+            y: (tracer_y as f64) + (vertex[o[0]].1 as f64),
         });
 
         let mut neighbors: [i8; 8];
@@ -168,8 +168,8 @@ impl BinaryImage {
                     contours[tracer_y][tracer_x] += value[o[0]];
                     vertices_nbr += 1;
                     ring.push(Coord {
-                        x: (tracer_x as i32) + (vertex[o[0]].0 as i32),
-                        y: (tracer_y as i32) + (vertex[o[0]].1 as i32),
+                        x: (tracer_x as f64) + (vertex[o[0]].0 as f64),
+                        y: (tracer_y as f64) + (vertex[o[0]].1 as f64),
                     });
                     o.rotate_right(rot.rem_euclid(8) as usize);
                     tracer_x = tracer_x.wrapping_add(MN[o[viv.1]].0 as usize);
@@ -188,8 +188,8 @@ impl BinaryImage {
 
             if (rn != 2) {
                 ring.push(Coord {
-                    x: (tracer_x as i32) + (vertex[o[0]].0 as i32),
-                    y: (tracer_y as i32) + (vertex[o[0]].1 as i32),
+                    x: (tracer_x as f64) + (vertex[o[0]].0 as f64),
+                    y: (tracer_y as f64) + (vertex[o[0]].1 as f64),
                 });
             }
         }
@@ -202,8 +202,8 @@ impl BinaryImage {
             o.rotate_left(rot.rem_euclid(8) as usize);
             vertices_nbr += 1;
             ring.push(Coord {
-                x: (tracer_x as i32) + (vertex[o[0]].0 as i32),
-                y: (tracer_y as i32) + (vertex[o[0]].1 as i32),
+                x: (tracer_x as f64) + (vertex[o[0]].0 as f64),
+                y: (tracer_y as f64) + (vertex[o[0]].1 as f64),
             });
         }
 

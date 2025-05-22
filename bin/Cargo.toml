@@ -1,11 +1,11 @@
 [package]
-name = "example-polygon"
+name = "mimesis-bin"
 version = "0.1.0"
 edition = "2021"
 publish = false
 
 [dependencies]
-mimesis = { path = "../.." }
+mimesis = { path = ".." }
 imageproc = "0.25.0"
 image = "0.25.6"
 geo = "0.30.0"
