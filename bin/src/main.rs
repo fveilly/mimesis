@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use image::{RgbaImage, Rgba, Luma, ImageBuffer, GenericImageView};
 use imageproc::drawing::draw_polygon_mut;
-use geo::{Polygon, Simplify};
+use geo::{ChaikinSmoothing, Polygon, Simplify};
 use imageproc::point::Point;
 use mimesis::BinaryImage;
 
@@ -37,11 +37,13 @@ fn draw_polygons(polygons: &[Polygon], width: u32, height: u32) -> RgbaImage {
 
 fn main() {
     let input_path = Path::new("assets/cow.png");
+    let asset_name = input_path.file_stem().unwrap().to_string_lossy();
     let image = image::open(input_path).expect("Failed to open image");
 
     let (width, height) = image.dimensions();
-    let binary = BinaryImage::from(image);
 
+    // Create binary mask from image
+    let binary = BinaryImage::from(image);
     let visual = ImageBuffer::from_fn(binary.width(), binary.height(), |x, y| {
         let pixel = binary.get_pixel(x, y);
         if *pixel {
@@ -51,28 +53,37 @@ fn main() {
         }
     });
 
-    let asset_name = input_path.file_stem().unwrap().to_string_lossy();
 
     let out_dir = Path::new("out");
     fs::create_dir_all(out_dir).expect("Failed to create output folder");
     let mask_path = out_dir.join(format!("{}_mask.png", asset_name));
     visual.save(mask_path).expect("Failed to save binary image");
 
+    // Convert binary mask to polygons using Theo Pavlidis' contour tracing algorithm
     let polygons: Vec<Polygon> = binary.trace_polygons();
-
     let result_img = draw_polygons(&polygons, width, height);
     let polygon_path = out_dir.join(format!("{}_polygon.png", asset_name));
     result_img.save(polygon_path).expect("Failed to save output");
 
+    // Simplify the polygons using Ramer–Douglas–Peucker algorithm
     let mut simplified_polygons: Vec<Polygon> = Vec::new();
-
     for polygon in polygons.iter() {
-        let simplified_polygon = polygon.simplify(&1.0);
+        let simplified_polygon = polygon.simplify(&10.0);
         println!("Polygon simplified {} -> {}", polygon.exterior().points().count(), simplified_polygon.exterior().points().count());
         simplified_polygons.push(simplified_polygon)
     }
-
     let simplified_result_img = draw_polygons(&simplified_polygons, width, height);
     let simplified_polygon_path = out_dir.join(format!("{}_simplified_polygon.png", asset_name));
     simplified_result_img.save(simplified_polygon_path).expect("Failed to save output");
+
+    // Smooth the polygons using Chaikin's algorithm
+    let mut smooth_polygons: Vec<Polygon> = Vec::new();
+    for polygon in simplified_polygons.iter() {
+        let smooth_polygon = polygon.chaikin_smoothing(1);
+        println!("Polygon smoothed {} -> {}", polygon.exterior().points().count(), smooth_polygon.exterior().points().count());
+        smooth_polygons.push(smooth_polygon)
+    }
+    let smooth_result_img = draw_polygons(&smooth_polygons, width, height);
+    let smooth_polygon_path = out_dir.join(format!("{}_smooth_polygon.png", asset_name));
+    smooth_result_img.save(smooth_polygon_path).expect("Failed to save output");
 }
