@@ -1,0 +1,13 @@
+[package]
+name = "mimesis"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = ["examples/*"]
+
+[dependencies]
+image = "0.25.6"
+bit-vec = "0.8.0"
+num-traits = "0.2.19"
+geo = "0.30.0"
