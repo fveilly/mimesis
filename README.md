@@ -11,3 +11,5 @@ This Rust project transforms a 2D image into a 3D mesh by extracting its alpha-b
 - Extrudes the 2D mesh into a **3D shape** with configurable depth
 - Maps the original image onto the extruded mesh IV
 - Exports the result to a mesh file
+
+cargo run -- --verbose --texture assets\cow.jpg --mask assets\cow_mask.png

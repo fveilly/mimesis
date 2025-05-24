@@ -3,6 +3,7 @@ mod contour;
 mod pixel;
 pub mod mesh;
 pub mod draw;
+mod error;
 
 pub use crate::binary_image::BinaryImage;
 

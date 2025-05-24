@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use earcutr::{earcut, Error};
-use geo::{CoordsIter, Polygon};
+use earcutr::{earcut};
+use geo::{BoundingRect, Polygon};
+use crate::error::Error;
 
 #[derive(Debug, Clone)]
 pub struct MeshGroup {
@@ -135,7 +136,7 @@ impl Mesh2D {
         Ok(())
     }
 
-    pub fn extrude(&self, depth: f64) -> Mesh3D {
+    pub fn extrude(&self, depth: f64, image_width: f64, image_height: f64) -> Mesh3D {
         let n = self.vertices.len();
 
         // We need separate vertices for different UV mappings
@@ -154,21 +155,16 @@ impl Mesh2D {
             .map(|v| v[1])
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), y| (min.min(y), max.max(y)));
 
-        let dx = if (max_x - min_x).abs() < f64::EPSILON { 1.0 } else { max_x - min_x };
-        let dy = if (max_y - min_y).abs() < f64::EPSILON { 1.0 } else { max_y - min_y };
-
         // Create bottom vertices (front face) - indices 0..n-1
         for [x, y] in &self.vertices {
-            vertices.push([*x, *y, 0.0]);
-            // UV mapping for front face (original image)
-            uvs.push([(*x - min_x) / dx, (*y - min_y) / dy]);
+            vertices.push([*x, -*y, 0.0]);
+            uvs.push([*x / image_width, -*y / image_height]);
         }
 
         // Create top vertices (back face) - indices n..2n-1
         for [x, y] in &self.vertices {
-            vertices.push([*x, *y, depth]);
-            // UV mapping for back face (can be same as front, or flipped)
-            uvs.push([(*x - min_x) / dx, (*y - min_y) / dy]);
+            vertices.push([*x, -*y, depth]);
+            uvs.push([*x / image_width, -*y / image_height]);
         }
 
         // Generate front and back faces
@@ -215,7 +211,6 @@ impl Mesh2D {
 
         // Create side faces with proper UV mapping
         let mut current_u = 0.0;
-        let vertex_offset = vertices.len(); // Starting index for new side vertices
 
         for &(i0, i1) in &boundary_edges {
             let p0 = self.vertices[i0];
@@ -230,20 +225,20 @@ impl Mesh2D {
             let base_idx = vertices.len();
 
             // Bottom left (original i0)
-            vertices.push([p0[0], p0[1], 0.0]);
+            vertices.push([p0[0], -p0[1], 0.0]);
             uvs.push([u0, 0.0]);
 
-            // Bottom right (original i1)  
-            vertices.push([p1[0], p1[1], 0.0]);
+            // Bottom right (original i1)
+            vertices.push([p1[0], -p1[1], 0.0]);
             uvs.push([u1, 0.0]);
 
             // Top right (extruded i1)
-            vertices.push([p1[0], p1[1], depth]);
-            uvs.push([u1, 1.0]);
+            vertices.push([p1[0], -p1[1], depth]);
+            uvs.push([u1, -1.0]);
 
             // Top left (extruded i0)
-            vertices.push([p0[0], p0[1], depth]);
-            uvs.push([u0, 1.0]);
+            vertices.push([p0[0], -p0[1], depth]);
+            uvs.push([u0, -1.0]);
 
             // Create two triangles for the side quad
             // Triangle 1: bottom-left, bottom-right, top-right
@@ -297,70 +292,21 @@ fn reverse_ring(coords: &mut [f64]) {
 }
 
 impl PolygonMesh for Polygon {
+
     fn mesh2d(&self) -> Result<Mesh2D, Error> {
         let mut vertices: Vec<[f64; 2]> = Vec::new();
         let mut coords: Vec<f64> = Vec::new();
         let mut holes: Vec<usize> = Vec::new();
 
-        // Get bounding box for Y-flipping
-        let mut min_y = f64::INFINITY;
-        let mut max_y = f64::NEG_INFINITY;
-
-        // First pass: collect all coordinates to determine bounding box
-        let exterior_points: Vec<_> = self.exterior().points().collect();
-        let exterior_coords = if exterior_points.len() > 1 &&
-            exterior_points[0].x() == exterior_points[exterior_points.len()-1].x() &&
-            exterior_points[0].y() == exterior_points[exterior_points.len()-1].y() {
-            &exterior_points[..exterior_points.len()-1]
-        } else {
-            &exterior_points[..]
-        };
-
-        // Update bounding box with exterior points
-        for coord in exterior_coords {
-            min_y = min_y.min(coord.y());
-            max_y = max_y.max(coord.y());
-        }
-
-        // Update bounding box with hole points
-        for hole in self.interiors() {
-            let hole_points: Vec<_> = hole.points().collect();
-            let hole_coords = if hole_points.len() > 1 &&
-                hole_points[0].x() == hole_points[hole_points.len()-1].x() &&
-                hole_points[0].y() == hole_points[hole_points.len()-1].y() {
-                &hole_points[..hole_points.len()-1]
-            } else {
-                &hole_points[..]
-            };
-
-            for coord in hole_coords {
-                min_y = min_y.min(coord.y());
-                max_y = max_y.max(coord.y());
-            }
-        }
-
-        let center_y = (min_y + max_y) * 0.5;
-
-        // Process exterior ring with Y-flipping applied upfront
-        for coord in exterior_coords {
+        for coord in self.exterior().points() {
             let x = coord.x();
-            let y = 2.0 * center_y - coord.y(); // Flip Y coordinate here
+            let y = coord.y();
 
             coords.push(x);
             coords.push(y);
             vertices.push([x, y]);
         }
-
-        // Ensure exterior ring has correct winding order (counter-clockwise after Y-flip)
-        let exterior_len = vertices.len();
-        if !is_counter_clockwise(&vertices[0..exterior_len]) {
-            // Reverse the exterior ring coordinates
-            let exterior_coords_count = exterior_len * 2;
-            reverse_ring(&mut coords[0..exterior_coords_count]);
-            vertices[0..exterior_len].reverse();
-        }
-
-        // Process holes with Y-flipping applied upfront
+        
         for hole in self.interiors() {
             holes.push(coords.len() / 2);
 
@@ -372,25 +318,14 @@ impl PolygonMesh for Polygon {
             } else {
                 &hole_points[..]
             };
-
-            let hole_start = vertices.len();
+            
             for coord in hole_coords {
                 let x = coord.x();
-                let y = 2.0 * center_y - coord.y(); // Flip Y coordinate here
+                let y = coord.y();
 
                 coords.push(x);
                 coords.push(y);
                 vertices.push([x, y]);
-            }
-
-            // Ensure hole has correct winding order (clockwise after Y-flip)
-            let hole_end = vertices.len();
-            if is_counter_clockwise(&vertices[hole_start..hole_end]) {
-                // Reverse the hole coordinates
-                let hole_coords_start = hole_start * 2;
-                let hole_coords_end = hole_end * 2;
-                reverse_ring(&mut coords[hole_coords_start..hole_coords_end]);
-                vertices[hole_start..hole_end].reverse();
             }
         }
 
