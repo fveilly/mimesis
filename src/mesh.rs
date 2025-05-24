@@ -1,28 +1,50 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use earcutr::{earcut, Error};
 use geo::{CoordsIter, Polygon};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
+pub struct MeshGroup {
+    pub indices: Vec<[usize; 3]>,
+    pub name: &'static str,
+}
+
+#[derive(Debug, Clone)]
 pub struct Mesh3D {
     pub vertices: Vec<[f64; 3]>,
-    pub indices: Vec<[usize; 3]>,
+    pub uvs: Option<Vec<[f64; 2]>>,
+    pub faces: Vec<MeshGroup>,
 }
 
 impl Mesh3D {
     pub fn export_obj(&self, path: &Path) -> std::io::Result<()> {
+
         let file = File::create(path)?;
         let mut writer = BufWriter::new(file);
+
+        writeln!(writer, "o Mesh3D")?;
 
         // Write vertices
         for [x, y, z] in &self.vertices {
             writeln!(writer, "v {} {} {}", x, y, z)?;
         }
 
-        // Write faces (OBJ indices are 1-based)
-        for [i0, i1, i2] in &self.indices {
-            writeln!(writer, "f {} {} {}", i0 + 1, i1 + 1, i2 + 1)?;
+        // Optionally write texture coordinates if present
+        if let Some(uvs) = &self.uvs {
+            for [u, v] in uvs {
+                writeln!(writer, "vt {} {}", u, v)?;
+            }
+        }
+
+        // Write face groups
+        for group in &self.faces {
+            writeln!(writer, "g {}", group.name)?;
+            for [i0, i1, i2] in &group.indices {
+                // Only use vertex index (v), not vt or vn
+                writeln!(writer, "f {} {} {}", i0 + 1, i1 + 1, i2 + 1)?;
+            }
         }
 
         Ok(())
@@ -62,7 +84,9 @@ impl Mesh2D {
     pub fn extrude(&self, depth: f64) -> Mesh3D {
         let n = self.vertices.len();
         let mut vertices = Vec::with_capacity(n * 2);
-        let mut indices = Vec::new();
+        let mut front_indices = Vec::new();
+        let mut back_indices = Vec::new();
+        let mut side_indices = Vec::new();
 
         // Create bottom (z = 0) and top (z = depth) vertices
         for [x, y] in &self.vertices {
@@ -78,36 +102,44 @@ impl Mesh2D {
             let i1 = triangle[1];
             let i2 = triangle[2];
 
-            // Bottom face (original winding)
-            indices.push([i0, i1, i2]);
+            // Front face = original winding
+            front_indices.push([i0, i1, i2]);
 
-            // Top face (reverse winding)
-            indices.push([i2 + n, i1 + n, i0 + n]);
+            // Back face = reversed winding on top vertices
+            back_indices.push([i2 + n, i1 + n, i0 + n]);
         }
 
-        // Create side walls
-        // Each edge becomes 2 triangles forming a quad
-        let mut edge_set = std::collections::HashSet::new();
-
+        // Count how many times each edge appears
+        let mut edge_count: HashMap<(usize, usize), usize> = HashMap::new();
         for triangle in self.indices.chunks(3) {
             for e in 0..3 {
                 let i0 = triangle[e];
                 let i1 = triangle[(e + 1) % 3];
-
                 let edge = if i0 < i1 { (i0, i1) } else { (i1, i0) };
-                if edge_set.insert(edge) {
-                    let (b0, b1) = edge;
-                    let t0 = b0 + n;
-                    let t1 = b1 + n;
-
-                    // Two triangles forming a quad
-                    indices.push([b0, b1, t1]);
-                    indices.push([b0, t1, t0]);
-                }
+                *edge_count.entry(edge).or_insert(0) += 1;
             }
         }
 
-        Mesh3D { vertices, indices }
+        // Only create sides for boundary edges (those used once)
+        for (&(b0, b1), &count) in &edge_count {
+            if count == 1 {
+                let t0 = b0 + n;
+                let t1 = b1 + n;
+
+                side_indices.push([b0, b1, t1]);
+                side_indices.push([b0, t1, t0]);
+            }
+        }
+
+        Mesh3D {
+            vertices,
+            uvs: None,
+            faces: vec![
+                MeshGroup { indices: front_indices, name: "front" },
+                MeshGroup { indices: back_indices, name: "back" },
+                MeshGroup { indices: side_indices, name: "side" },
+            ],
+        }
     }
 }
 
@@ -115,7 +147,8 @@ impl Mesh3D {
     pub fn new() -> Self {
         Self {
             vertices: Vec::new(),
-            indices: Vec::new(),
+            uvs: None,
+            faces: Vec::new(),
         }
     }
 }
