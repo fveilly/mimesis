@@ -39,58 +39,58 @@ struct Args {
 
     /// File patterns to include in batch processing (e.g., "*.png,*.jpg")
     #[arg(long, default_value = "*.png,*.jpg,*.jpeg,*.bmp,*.tiff,*.tga")]
-    include_patterns: String,
+    include_patterns: Option<String>,
 
     /// File patterns to exclude from batch processing
     #[arg(long)]
     exclude_patterns: Option<String>,
 
     /// Number of parallel workers for batch processing
-    #[arg(long, default_value = "1")]
-    workers: usize,
+    #[arg(long)]
+    workers: Option<usize>,
 
     /// Continue batch processing even if some files fail
     #[arg(long)]
-    continue_on_error: bool,
+    continue_on_error: Option<bool>,
 
     /// Simplification tolerance for Ramer-Douglas-Peucker algorithm
-    #[arg(long, default_value = "10.0")]
-    simplify_tolerance: f64,
+    #[arg(long)]
+    simplify_tolerance: Option<f64>,
 
     /// Number of Chaikin smoothing iterations
-    #[arg(long, default_value = "1")]
-    smooth_iterations: usize,
+    #[arg(long)]
+    smooth_iterations: Option<usize>,
 
     /// Extrusion height for 3D mesh
-    #[arg(long, default_value = "20.0")]
-    extrude_height: f64,
+    #[arg(long)]
+    extrude_height: Option<f64>,
 
     /// Minimum polygon dimension (in pixels)
-    #[arg(long, default_value = "0")]
-    min_polygon_dimension: usize,
+    #[arg(long)]
+    min_polygon_dimension: Option<usize>,
 
     /// Threshold for binary mask generation (0-255)
-    #[arg(long, default_value = "128")]
-    threshold: u8,
+    #[arg(long)]
+    threshold: Option<u8>,
 
     /// Method for generating binary mask from texture
-    #[arg(long, default_value = "alpha")]
-    mask_method: MaskMethod,
+    #[arg(long)]
+    mask_method: Option<MaskMethod>,
 
     /// Side texture file name for OBJ export
-    #[arg(long, default_value = "side.jpg")]
-    side_texture: String,
+    #[arg(long)]
+    side_texture: Option<String>,
 
     /// Back texture file name for OBJ export
-    #[arg(long, default_value = "back.jpg")]
-    back_texture: String,
+    #[arg(long)]
+    back_texture: Option<String>,
 
     /// Skip saving intermediate polygon images
     #[arg(long)]
-    skip_intermediates: bool,
+    skip_intermediates: Option<bool>,
 
     /// Verbose output
-    #[arg(short, long)]
+    #[arg(short, long, default_value = "false")]
     verbose: bool,
 }
 
@@ -503,47 +503,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.mask.is_some() {
         config.input.mask = args.mask;
     }
-    if args.simplify_tolerance != 10.0 {
-        config.processing.simplify_tolerance = args.simplify_tolerance;
+    if let Some(simplify_tolerance) = args.simplify_tolerance {
+        config.processing.simplify_tolerance = simplify_tolerance;
     }
-    if args.smooth_iterations != 1 {
-        config.processing.smooth_iterations = args.smooth_iterations;
+    if let Some(smooth_iterations) = args.smooth_iterations {
+        config.processing.smooth_iterations = smooth_iterations;
     }
-    if args.extrude_height != 20.0 {
-        config.processing.extrude_height = args.extrude_height;
+    if let Some(extrude_height) = args.extrude_height {
+        config.processing.extrude_height = extrude_height;
     }
-    if args.threshold != 128 {
-        config.processing.threshold = args.threshold;
+    if let Some(threshold) = args.threshold {
+        config.processing.threshold = threshold;
     }
-    if args.workers != 1 {
-        config.batch.workers = args.workers;
+    if let Some(workers) = args.workers {
+        config.batch.workers = workers;
     }
     if let Some(output) = args.output {
         config.output.output_folder = output;
     }
-    config.batch.continue_on_error = args.continue_on_error;
-    config.output.skip_intermediates = args.skip_intermediates;
+    if let Some(continue_on_error) = args.continue_on_error {
+        config.batch.continue_on_error = continue_on_error;
+    }
+    if let Some(skip_intermediates) = args.skip_intermediates {
+        config.output.skip_intermediates = skip_intermediates;
+    }
 
     // Parse include patterns from command line
-    let include_patterns: Vec<String> = args.include_patterns
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .collect();
+    if let Some(include_patterns) = args.include_patterns {
+        let mut include_patterns: Vec<String> = include_patterns
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect();
+        config.batch.include_patterns.append(&mut include_patterns);
+    }
+    if let Some(exclude_patterns) = args.exclude_patterns {
+        let mut exclude_patterns: Vec<String> = exclude_patterns
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect();
+        config.batch.exclude_patterns.append(&mut exclude_patterns);
+    }
 
-    let mut exclude_patterns: Vec<String> = args.exclude_patterns
-        .map(|s| s.split(',').map(|p| p.trim().to_string()).collect())
-        .unwrap_or_default();
-
-    exclude_patterns.push("*_mask*".to_string());
+    config.batch.exclude_patterns.push("*_mask*".to_string());
 
     // Find input files
-    let input_files = find_input_files(&config.input.input, &include_patterns, &exclude_patterns)?;
+    let input_files = find_input_files(&config.input.input, &config.batch.include_patterns, &config.batch.exclude_patterns)?;
 
     if input_files.is_empty() {
         eprintln!("No input files found matching the criteria");
         std::process::exit(1);
     }
-    
+
     let batch = config.input.input.is_dir();
 
     if args.verbose {
@@ -576,7 +586,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         else {
             config.input.mask.clone()
         };
-        
+
         match process_single_file(
             &input_file,
             mask.as_deref(),
