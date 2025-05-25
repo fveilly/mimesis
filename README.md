@@ -12,11 +12,13 @@ Generate 3D meshes from images using contour tracing and polygon extrusion.
 - Maps the original image onto the extruded mesh IV
 - Exports the result to a wavefront obj file
 
-cargo run -- --verbose --texture assets\cow.jpg --mask assets\cow_mask.png
-
-# Mesh Generator
-
-Generate 3D meshes from images using contour tracing and polygon extrusion.
+| Step | Description                      | Example                                  |
+| ---- |----------------------------------|------------------------------------------|
+| 1️⃣  | **Original Image**               | ![Original](https://github.com/fveilly/mimesis/blob/main/bin/assets/girl.png)         |
+| 2️⃣  | **Binary Mask**                  | ![Mask](https://github.com/fveilly/mimesis/blob/main/bin/assets/girl_mask.png)        |
+| 3️⃣  | **Polygon Contour** (smoothed)   | ![Contour](https://github.com/fveilly/mimesis/blob/main/docs/girl_polygon.png)        |
+| 4️⃣  | **Extruded 3D Mesh**             | ![3D](https://github.com/fveilly/mimesis/blob/main/docs/girl_3d.png)       |
+| 5️⃣  | **Vertex View**                  | ![Wireframe](https://github.com/fveilly/mimesis/blob/main/girl_3d_wired.png) |
 
 ## Installation
 

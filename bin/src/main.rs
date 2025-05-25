@@ -451,19 +451,31 @@ fn process_single_file(
     }
 
     // Simplify polygons
-    let mut simplified_polygons: Vec<Polygon> = Vec::new();
-    for polygon in polygons.iter() {
-        let simplified_polygon = polygon.simplify(&config.processing.simplify_tolerance);
-        simplified_polygons.push(simplified_polygon);
+    let simplified_polygons: Vec<Polygon> = if config.processing.simplify_tolerance <= 0f64 {
+        polygons
     }
+    else {
+        let mut simplified_polygons: Vec<Polygon> = Vec::new();
+        for polygon in polygons.iter() {
+            let simplified_polygon = polygon.simplify(&config.processing.simplify_tolerance);
+            simplified_polygons.push(simplified_polygon);
+        }
+        simplified_polygons
+    };
 
     // Smooth polygons
-    let mut smooth_polygons: Vec<Polygon> = Vec::new();
-    for polygon in simplified_polygons.iter() {
-        let smooth_polygon = polygon.chaikin_smoothing(config.processing.smooth_iterations);
-        smooth_polygons.push(smooth_polygon);
+    let smooth_polygons: Vec<Polygon> = if config.processing.smooth_iterations <= 0 {
+        simplified_polygons
     }
-
+    else {
+        let mut smooth_polygons: Vec<Polygon> = Vec::new();
+        for polygon in simplified_polygons.iter() {
+            let smooth_polygon = polygon.chaikin_smoothing(config.processing.smooth_iterations);
+            smooth_polygons.push(smooth_polygon);
+        }
+        smooth_polygons
+    };
+    
     // Create meshes
     for (i, polygon) in smooth_polygons.iter().enumerate() {
         // Create 2D mesh
