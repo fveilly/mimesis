@@ -1,6 +1,6 @@
 # 🖼️ Mimesis
 
-This Rust project transforms a 2D image into a 3D mesh by extracting its alpha-based silhouette and generating a triangulated, extruded mesh from it.
+Generate 3D meshes from images using contour tracing and polygon extrusion.
 
 ## ✨ Features
 
@@ -13,3 +13,177 @@ This Rust project transforms a 2D image into a 3D mesh by extracting its alpha-b
 - Exports the result to a wavefront obj file
 
 cargo run -- --verbose --texture assets\cow.jpg --mask assets\cow_mask.png
+
+# Mesh Generator
+
+Generate 3D meshes from images using contour tracing and polygon extrusion.
+
+## Installation
+
+```bash
+cargo build --release
+```
+
+## Usage
+
+### Basic Usage
+
+```bash
+# Process a single image
+./mimesis -i texture.png -o output/
+
+# Process with custom mask
+./mimesis -i texture.png -m mask.png -o output/
+
+# Batch process directory
+./mimesis -i images/ -o output/
+```
+
+### Configuration File
+
+Generate a default configuration file:
+
+```bash
+./mimesis --generate-config -c config.json
+```
+
+Use configuration file:
+
+```bash
+./mimesis -c config.json
+```
+
+## Command Line Options
+
+### Input/Output
+- `-i, --input <PATH>` - Input image file or directory
+- `-m, --mask <PATH>` - Optional binary mask image
+- `-o, --output <PATH>` - Output directory
+- `-c, --config <PATH>` - Configuration file path
+
+### Processing Parameters
+- `--simplify-tolerance <FLOAT>` - Polygon simplification tolerance (default: 10.0)
+- `--smooth-iterations <INT>` - Number of smoothing iterations (default: 1)
+- `--extrude-height <FLOAT>` - 3D extrusion height (default: 20.0)
+- `--min-polygon-dimension <INT>` - Minimum polygon size in pixels (default: 0)
+- `--threshold <INT>` - Binary mask threshold 0-255 (default: 128)
+- `--mask-method <METHOD>` - Mask generation method: `alpha`, `luminance`, `red`, `green`, `blue` (default: alpha)
+
+### Batch Processing
+- `--include-patterns <PATTERNS>` - File patterns to include (e.g., "*.png,*.jpg")
+- `--exclude-patterns <PATTERNS>` - File patterns to exclude
+- `--workers <INT>` - Number of parallel workers (default: 1)
+- `--continue-on-error` - Continue processing if some files fail
+
+### Output Options
+- `--side-texture <PATH>` - Custom side texture file
+- `--back-texture <PATH>` - Custom back texture file
+- `--skip-intermediates` - Skip saving intermediate files
+
+### Other
+- `--generate-config` - Generate default config file and exit
+- `-v, --verbose` - Verbose output
+
+## Configuration File Format
+
+The tool supports JSON, YAML, and TOML configuration files:
+
+## Mask Generation Methods
+
+When no mask is provided, the tool can auto-generate binary masks using:
+
+- **Alpha** - Uses alpha channel transparency (default)
+- **Luminance** - Uses brightness/luminance values
+- **Red/Green/Blue** - Uses individual color channels
+
+## Output Structure
+
+For each processed image, the tool generates:
+
+```
+output/
+├── textures/
+│   ├── image_name.png      # Front texture
+│   ├── side.png            # Side texture (if provided)
+│   └── back.png            # Back texture (if provided)
+├── image_name_0.obj        # 3D mesh file
+├── image_name_0.mtl        # Material file
+```
+
+## Batch Processing
+
+When processing directories:
+
+1. All matching files are found using include/exclude patterns
+2. For each image, the tool looks for a corresponding mask file with `_mask` suffix
+3. If no mask is found, one is auto-generated
+4. Files with `_mask` in the name are automatically excluded from processing
+
+Example batch structure:
+```
+input/
+├── sprite1.png
+├── sprite1_mask.png    # Optional custom mask
+├── sprite2.png
+└── character.jpg
+```
+
+## Examples
+
+### Generate mesh with custom parameters
+
+```bash
+./mimesis \
+  -i character.png \
+  -o models/ \
+  --extrude-height 30.0 \
+  --simplify-tolerance 5.0 \
+  --smooth-iterations 2 \
+  --threshold 200 \
+  --mask-method luminance
+```
+
+### Batch process with configuration
+
+```bash
+# Generate config template
+./mimesis --generate-config -c batch_config.yaml
+
+# Edit config file, then run
+./mimesis -c batch_config.yaml -i sprites/ -o output/
+```
+
+### Process with custom textures
+
+```bash
+./mimesis \
+  -i logo.png \
+  -o output/ \
+  --side-texture wood_texture.jpg \
+  --back-texture metal_texture.jpg
+```
+
+## Supported Formats
+
+### Input Images
+- PNG, JPEG, BMP, TIFF, TGA
+- RGB and RGBA formats supported
+- Alpha channel used for mask generation when available
+
+### Output Formats
+- OBJ (Wavefront) mesh files
+- MTL (Material) files
+- PNG textures and visualizations
+
+### Configuration Files
+- JSON (.json)
+- YAML (.yaml, .yml)
+- TOML (.toml)
+
+## Performance Tips
+
+1. **Simplification**: Higher `simplify_tolerance` values create simpler meshes
+2. **Smoothing**: More iterations create smoother curves but increase processing time
+3. **Minimum polygon size**: Filter out small noise polygons
+4. **Batch processing**: Use `--workers` for parallel processing (TO BE IMPLEMENTED)
+5. **Skip intermediates**: Use `--skip-intermediates` to save disk space
