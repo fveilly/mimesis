@@ -79,11 +79,11 @@ struct Args {
 
     /// Side texture file name for OBJ export
     #[arg(long)]
-    side_texture: Option<String>,
+    side_texture: Option<PathBuf>,
 
     /// Back texture file name for OBJ export
     #[arg(long)]
-    back_texture: Option<String>,
+    back_texture: Option<PathBuf>,
 
     /// Skip saving intermediate polygon images
     #[arg(long)]
@@ -160,14 +160,12 @@ struct BatchConfig {
 struct OutputConfig {
     /// Output folder for processed files
     pub output_folder: PathBuf,
-    /// Side texture file name for OBJ export
-    pub side_texture: String,
-    /// Back texture file name for OBJ export
-    pub back_texture: String,
+    /// Side texture path for OBJ export
+    pub side_texture: Option<PathBuf>,
+    /// Back texture path for OBJ export
+    pub back_texture: Option<PathBuf>,
     /// Skip saving intermediate polygon images
     pub skip_intermediates: bool,
-    /// Create subdirectories for each input file in batch mode
-    pub create_subdirs: bool,
 }
 
 impl Default for Config {
@@ -200,10 +198,9 @@ impl Default for Config {
             },
             output: OutputConfig {
                 output_folder: PathBuf::from("output"),
-                side_texture: "side.jpg".to_string(),
-                back_texture: "back.jpg".to_string(),
+                side_texture: None,
+                back_texture: None,
                 skip_intermediates: false,
-                create_subdirs: true,
             },
         }
     }
@@ -392,19 +389,34 @@ fn process_single_file(
     };
 
     // Create output directory
-    let file_output_dir = if config.output.create_subdirs {
-        output_dir.join(&asset_name.to_string())
-    } else {
-        output_dir.to_path_buf()
-    };
+    let file_output_dir = output_dir.to_path_buf();
+    let textures_output_dir = file_output_dir.join("textures");
 
-    fs::create_dir_all(&file_output_dir)
+    fs::create_dir_all(&textures_output_dir)
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
 
     // Save original texture image
-    let texture_filename = format!("{}_texture.png", asset_name);
-    let texture_path = file_output_dir.join(&texture_filename);
+    let front_texture_filename = format!("{}.png", asset_name);
+    let texture_path = textures_output_dir.join(&front_texture_filename);
     save_uncompressed_png(&texture_path, &texture_image)?;
+
+    let side_texture_filename = if let Some(side_texture_path) = &config.output.side_texture {
+        let filename = "side.png".to_string();
+        fs::copy(&side_texture_path, textures_output_dir.join(&filename))
+            .map_err(|e| format!("Failed to copy side texture: {}", e))?;
+        filename
+    } else {
+        front_texture_filename.clone()
+    };
+
+    let back_texture_filename = if let Some(back_texture_path) = &config.output.back_texture {
+        let filename = "back.png".to_string();
+        fs::copy(&back_texture_path, textures_output_dir.join(&filename))
+            .map_err(|e| format!("Failed to copy back texture: {}", e))?;
+        filename
+    } else {
+        front_texture_filename.clone()
+    };
 
     // Save binary mask visualization
     if !config.output.skip_intermediates {
@@ -458,9 +470,11 @@ fn process_single_file(
         let mesh2d = polygon.mesh2d()
             .map_err(|e| format!("Failed to create 2D mesh for polygon {}: {}", i, e))?;
 
-        let mesh2d_path = file_output_dir.join(format!("{}_{}.2d.obj", asset_name, i));
-        mesh2d.export_obj(mesh2d_path.as_path())
-            .map_err(|e| format!("Failed to export 2D mesh: {}", e))?;
+        if !config.output.skip_intermediates {
+            let mesh2d_path = file_output_dir.join(format!("{}_{}.2d.obj", asset_name, i));
+            mesh2d.export_obj(mesh2d_path.as_path())
+                .map_err(|e| format!("Failed to export 2D mesh: {}", e))?;
+        }
 
         // Create 3D mesh
         let mesh3d = mesh2d.extrude(config.processing.extrude_height, width as f64, height as f64);
@@ -470,9 +484,9 @@ fn process_single_file(
         mesh3d.export_obj(
             mesh_path.as_path(),
             material_path.as_path(),
-            &texture_filename,
-            &config.output.back_texture,
-            &config.output.side_texture
+            &front_texture_filename,
+            &back_texture_filename,
+            &side_texture_filename
         ).map_err(|e| format!("Failed to export 3D mesh: {}", e))?;
     }
 

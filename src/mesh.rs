@@ -70,7 +70,7 @@ impl Mesh3D {
         writeln!(file, "d 1.0")?;
         writeln!(file, "Ns 10.0")?;
         writeln!(file, "illum 2")?;
-        writeln!(file, "map_Kd {}", front_texture)?;
+        writeln!(file, "map_Kd textures/{}", front_texture)?;
 
         // Back material
         writeln!(file, "\nnewmtl back")?;
@@ -80,7 +80,7 @@ impl Mesh3D {
         writeln!(file, "d 1.0")?;
         writeln!(file, "Ns 10.0")?;
         writeln!(file, "illum 2")?;
-        writeln!(file, "map_Kd {}", back_texture)?;
+        writeln!(file, "map_Kd textures/{}", back_texture)?;
 
         // Side material
         writeln!(file, "\nnewmtl side")?;
@@ -90,7 +90,7 @@ impl Mesh3D {
         writeln!(file, "d 1.0")?;
         writeln!(file, "Ns 10.0")?;
         writeln!(file, "illum 2")?;
-        writeln!(file, "map_Kd {}", side_texture)?;
+        writeln!(file, "map_Kd textures/{}", side_texture)?;
 
         Ok(())
     }
@@ -119,7 +119,7 @@ impl Mesh2D {
 
         // Write vertex positions
         for [x, y] in &self.vertices {
-            writeln!(writer, "v {} {} 0.0", x, y)?;
+            writeln!(writer, "v {} {} 0.0", x, -y)?;
         }
 
         // Write triangle faces (OBJ is 1-based index)
