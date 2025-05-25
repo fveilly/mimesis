@@ -1,11 +1,14 @@
 use mimesis::draw::DrawMesh;
 use mimesis::mesh::PolygonMesh;
 use std::fs;
+use std::fs::File;
 use std::path::{Path, PathBuf};
-use image::{Luma, ImageBuffer, GenericImageView, DynamicImage};
+use image::{Luma, ImageBuffer, GenericImageView, DynamicImage, ImageFormat, ImageEncoder, ExtendedColorType, ImageResult};
 use geo::{ChaikinSmoothing, Polygon, Simplify};
 use mimesis::BinaryImage;
 use clap::{Parser, ValueEnum};
+use clap::error::ErrorKind::Format;
+use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 
 #[derive(Parser)]
 #[command(name = "mesh-generator")]
@@ -35,6 +38,10 @@ struct Args {
     /// Extrusion height for 3D mesh
     #[arg(long, default_value = "20.0")]
     extrude_height: f64,
+
+    /// Minimum polygon dimension (in pixels)
+    #[arg(long, default_value = "0")]
+    min_polygon_dimension: usize,
 
     /// Threshold for binary mask generation (0-255)
     #[arg(long, default_value = "128")]
@@ -75,6 +82,38 @@ enum MaskMethod {
     Blue,
 }
 
+fn get_extended_color_type(image: &DynamicImage) -> ExtendedColorType {
+    match image {
+        DynamicImage::ImageLuma8(_) => ExtendedColorType::L8,
+        DynamicImage::ImageLumaA8(_) => ExtendedColorType::La8,
+        DynamicImage::ImageRgb8(_) => ExtendedColorType::Rgb8,
+        DynamicImage::ImageRgba8(_) => ExtendedColorType::Rgba8,
+        DynamicImage::ImageLuma16(_) => ExtendedColorType::L16,
+        DynamicImage::ImageLumaA16(_) => ExtendedColorType::La16,
+        DynamicImage::ImageRgb16(_) => ExtendedColorType::Rgb16,
+        DynamicImage::ImageRgba16(_) => ExtendedColorType::Rgba16,
+        _ => panic!("Unsupported DynamicImage format"),
+    }
+}
+
+fn save_uncompressed_png<P: AsRef<Path>>(
+    path: P,
+    image: &DynamicImage,
+) -> ImageResult<()> {
+    let file = File::create(path)?;
+    let encoder = PngEncoder::new_with_quality(
+        file,
+        CompressionType::Best,
+        FilterType::NoFilter,
+    );
+    encoder.write_image(
+        image.as_bytes(),
+        image.width(),
+        image.height(),
+        get_extended_color_type(image),
+    )
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
@@ -111,7 +150,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let mask_image = image::open(mask_path)
             .map_err(|e| format!("Failed to open mask image: {}", e))?;
-        BinaryImage::from_mask(mask_image)
+        BinaryImage::from_mask(mask_image.to_luma8())
     } else {
         if args.verbose {
             println!("Generating mask from texture using {:?} method", args.mask_method);
@@ -126,8 +165,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Save original texture image
     let texture_filename = format!("{}_texture.png", asset_name);
     let texture_path = args.output.join(&texture_filename);
-    texture_image.save(&texture_path)
-        .map_err(|e| format!("Failed to save texture: {}", e))?;
+    save_uncompressed_png(&texture_path, &texture_image)?;
 
     // Save binary mask visualization
     if !args.skip_intermediates {
@@ -141,8 +179,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
         let mask_path = args.output.join(format!("{}_mask.png", asset_name));
-        visual.save(&mask_path)
-            .map_err(|e| format!("Failed to save binary mask: {}", e))?;
+        save_uncompressed_png(&mask_path,  &DynamicImage::ImageLuma8(visual))?;
 
         if args.verbose {
             println!("Saved binary mask to: {}", mask_path.display());
@@ -150,7 +187,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Convert binary mask to polygons using Theo Pavlidis' contour tracing algorithm
-    let polygons: Vec<Polygon> = binary.trace_polygons();
+    let polygons: Vec<Polygon> = binary.trace_polygons(10);
 
     if args.verbose {
         println!("Found {} polygons", polygons.len());

@@ -1,5 +1,5 @@
 use crate::binary_image::BinaryImage;
-use geo::{Polygon, LineString, Coord, Contains};
+use geo::{Polygon, LineString, Coord, Contains, BoundingRect};
 
 const O_VERTEX_WITH_BORDER: [(i8, i8); 7] = [(-1, 0), (0, 0), (-1, -1), (0, 0), (0, -1), (0, 0), (0, 0)]; // Bottom left coordinates with a border
 const H_VERTEX_WITH_BORDER: [(i8, i8); 7] = [(0, 0), (0, 0), (-1, 0), (0, 0), (-1, -1), (0, 0), (0, -1)]; // Bottom right coordinates with a border
@@ -9,7 +9,7 @@ const MN: [(i8, i8); 8] = [(0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-
 
 impl BinaryImage {
 
-    pub fn trace_polygons(&self) -> Vec<Polygon> {
+    pub fn trace_polygons(&self, min_dimension: usize) -> Vec<Polygon> {
         let width = self.width() as usize;
         let height = self.height() as usize;
         let mut contours = vec![vec![0i8; width + 2]; height + 2];
@@ -49,7 +49,13 @@ impl BinaryImage {
                             O_VALUE_FOR_SIGNED,
                             &mut contours,
                         );
-                        polygons.push(Polygon::new(ring, vec![]));
+                        if min_dimension > 0 {
+                            if let Some(bounding_rect) = ring.bounding_rect() {
+                                if bounding_rect.width() >= min_dimension as f64 && bounding_rect.height() >= min_dimension as f64 {
+                                    polygons.push(Polygon::new(ring, vec![]));
+                                }
+                            }
+                        }
                     }
                 }
                 // Check for interior boundary (background pixel with foreground to the left, indicating a hole)
@@ -70,7 +76,13 @@ impl BinaryImage {
                             H_VALUE_FOR_SIGNED,
                             &mut contours,
                         );
-                        inner_rings.push(ring);
+                        if min_dimension > 0 {
+                            if let Some(bounding_rect) = ring.bounding_rect() {
+                                if bounding_rect.width() >= min_dimension as f64 && bounding_rect.height() >= min_dimension as f64 {
+                                    inner_rings.push(ring);
+                                }
+                            }
+                        }
                     }
                 }
 

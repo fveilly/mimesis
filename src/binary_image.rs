@@ -1,6 +1,6 @@
 use std::ops::Deref;
 use bit_vec::BitVec;
-use image::{DynamicImage, GenericImage, GenericImageView, Pixel};
+use image::{DynamicImage, GenericImage, GenericImageView, GrayImage, Pixel};
 use num_traits::{ToPrimitive, Zero};
 use crate::pixel::Bit;
 
@@ -57,14 +57,11 @@ impl BinaryImage {
         }
     }
 
-    pub fn from_mask(image: DynamicImage) -> Self
+    pub fn from_mask(image: GrayImage) -> Self
     {
-        let buffer = image.pixels().map(|pixel| {
-            let rgba = pixel.2;
-            rgba.0[0] != 0 || rgba.0[1] != 0 || rgba.0[2] != 0
-            
-        }).collect();
-        BinaryImage::from_bitvec(image.width(), image.height(), buffer)
+        let (width, height) = image.dimensions();
+        let buffer = image.iter().map(|&v| v == 255).collect();
+        BinaryImage::from_bitvec(width, height, buffer)
     }
 
     #[inline]
