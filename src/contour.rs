@@ -49,12 +49,11 @@ impl BinaryImage {
                             O_VALUE_FOR_SIGNED,
                             &mut contours,
                         );
-                        if min_dimension > 0 {
-                            if let Some(bounding_rect) = ring.bounding_rect() {
-                                if bounding_rect.width() >= min_dimension as f64 && bounding_rect.height() >= min_dimension as f64 {
-                                    polygons.push(Polygon::new(ring, vec![]));
-                                }
-                            }
+                        if min_dimension == 0 || ring.bounding_rect()
+                            .map(|rect| rect.width() >= min_dimension as f64 && rect.height() >= min_dimension as f64)
+                            .unwrap_or(false)
+                        {
+                            polygons.push(Polygon::new(ring, vec![]));
                         }
                     }
                 }
@@ -76,12 +75,11 @@ impl BinaryImage {
                             H_VALUE_FOR_SIGNED,
                             &mut contours,
                         );
-                        if min_dimension > 0 {
-                            if let Some(bounding_rect) = ring.bounding_rect() {
-                                if bounding_rect.width() >= min_dimension as f64 && bounding_rect.height() >= min_dimension as f64 {
-                                    inner_rings.push(ring);
-                                }
-                            }
+                        if min_dimension == 0 || ring.bounding_rect()
+                            .map(|rect| rect.width() >= min_dimension as f64 && rect.height() >= min_dimension as f64)
+                            .unwrap_or(false)
+                        {
+                            inner_rings.push(ring);
                         }
                     }
                 }

@@ -9,23 +9,49 @@ use mimesis::BinaryImage;
 use clap::{Parser, ValueEnum};
 use clap::error::ErrorKind::Format;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+use serde::{Deserialize, Serialize};
+use std::io::Write;
 
 #[derive(Parser)]
 #[command(name = "mesh-generator")]
 #[command(about = "Generate 3D meshes from images using contour tracing")]
 #[command(version = "1.0")]
 struct Args {
-    /// Input texture image path
+    /// Input texture image path or directory for batch processing
     #[arg(short, long)]
-    texture: PathBuf,
+    input: Option<PathBuf>,
 
     /// Optional binary mask image path (if not provided, mask will be generated from texture)
     #[arg(short, long)]
     mask: Option<PathBuf>,
 
     /// Output directory
-    #[arg(short, long, default_value = "out")]
-    output: PathBuf,
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    /// Configuration file path
+    #[arg(short, long)]
+    config: Option<PathBuf>,
+
+    /// Generate default configuration file and exit
+    #[arg(long)]
+    generate_config: bool,
+
+    /// File patterns to include in batch processing (e.g., "*.png,*.jpg")
+    #[arg(long, default_value = "*.png,*.jpg,*.jpeg,*.bmp,*.tiff,*.tga")]
+    include_patterns: String,
+
+    /// File patterns to exclude from batch processing
+    #[arg(long)]
+    exclude_patterns: Option<String>,
+
+    /// Number of parallel workers for batch processing
+    #[arg(long, default_value = "1")]
+    workers: usize,
+
+    /// Continue batch processing even if some files fail
+    #[arg(long)]
+    continue_on_error: bool,
 
     /// Simplification tolerance for Ramer-Douglas-Peucker algorithm
     #[arg(long, default_value = "10.0")]
@@ -68,7 +94,7 @@ struct Args {
     verbose: bool,
 }
 
-#[derive(Clone, ValueEnum, Debug)]
+#[derive(Clone, ValueEnum, Debug, Serialize, Deserialize)]
 enum MaskMethod {
     /// Use luminance/brightness to generate mask
     Luminance,
@@ -80,6 +106,107 @@ enum MaskMethod {
     Green,
     /// Use blue channel to generate mask
     Blue,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Config {
+    /// Innput setting
+    pub input: InputConfig,
+    /// Processing parameters
+    pub processing: ProcessingConfig,
+    /// Batch processing settings
+    pub batch: BatchConfig,
+    /// Output settings
+    pub output: OutputConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct InputConfig {
+    /// Input image file path or directory path
+    pub input: PathBuf,
+    /// Optional binary mask image path
+    pub mask: Option<PathBuf>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ProcessingConfig {
+    /// Simplification tolerance for Ramer-Douglas-Peucker algorithm
+    pub simplify_tolerance: f64,
+    /// Number of Chaikin smoothing iterations
+    pub smooth_iterations: usize,
+    /// Extrusion height for 3D mesh
+    pub extrude_height: f64,
+    /// Minimum polygon dimension (in pixels)
+    pub min_polygon_dimension: usize,
+    /// Threshold for binary mask generation (0-255)
+    pub threshold: u8,
+    /// Method for generating binary mask from texture
+    pub mask_method: MaskMethod,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BatchConfig {
+    /// File patterns to include in batch processing
+    pub include_patterns: Vec<String>,
+    /// File patterns to exclude from batch processing
+    pub exclude_patterns: Vec<String>,
+    /// Number of parallel workers for batch processing
+    pub workers: usize,
+    /// Continue batch processing even if some files fail
+    pub continue_on_error: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OutputConfig {
+    /// Output folder for processed files
+    pub output_folder: PathBuf,
+    /// Side texture file name for OBJ export
+    pub side_texture: String,
+    /// Back texture file name for OBJ export
+    pub back_texture: String,
+    /// Skip saving intermediate polygon images
+    pub skip_intermediates: bool,
+    /// Create subdirectories for each input file in batch mode
+    pub create_subdirs: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            input: InputConfig {
+                input: PathBuf::from("texture.png"),
+                mask: None,
+            },
+            processing: ProcessingConfig {
+                simplify_tolerance: 10.0,
+                smooth_iterations: 1,
+                extrude_height: 20.0,
+                min_polygon_dimension: 0,
+                threshold: 128,
+                mask_method: MaskMethod::Alpha,
+            },
+            batch: BatchConfig {
+                include_patterns: vec![
+                    "*.png".to_string(),
+                    "*.jpg".to_string(),
+                    "*.jpeg".to_string(),
+                    "*.bmp".to_string(),
+                    "*.tiff".to_string(),
+                    "*.tga".to_string(),
+                ],
+                exclude_patterns: vec![],
+                workers: 1,
+                continue_on_error: false,
+            },
+            output: OutputConfig {
+                output_folder: PathBuf::from("output"),
+                side_texture: "side.jpg".to_string(),
+                back_texture: "back.jpg".to_string(),
+                skip_intermediates: false,
+                create_subdirs: true,
+            },
+        }
+    }
 }
 
 fn get_extended_color_type(image: &DynamicImage) -> ExtendedColorType {
@@ -114,61 +241,173 @@ fn save_uncompressed_png<P: AsRef<Path>>(
     )
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
+fn load_config(config_path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
+    let config_str = fs::read_to_string(config_path)?;
+    let config: Config = match config_path.extension().and_then(|s| s.to_str()) {
+        Some("json") => serde_json::from_str(&config_str)?,
+        Some("toml") => toml::from_str(&config_str)?,
+        Some("yaml") | Some("yml") => serde_yaml::from_str(&config_str)?,
+        _ => return Err("Unsupported config file format. Use .json, .toml, or .yaml".into()),
+    };
+    Ok(config)
+}
 
-    // Validate input files
-    if !args.texture.exists() {
-        eprintln!("Error: Texture file '{}' does not exist", args.texture.display());
-        std::process::exit(1);
+fn save_default_config(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config::default();
+    let config_str = match path.extension().and_then(|s| s.to_str()) {
+        Some("json") => serde_json::to_string_pretty(&config)?,
+        Some("toml") => toml::to_string_pretty(&config)?,
+        Some("yaml") | Some("yml") => serde_yaml::to_string(&config)?,
+        _ => serde_json::to_string_pretty(&config)?, // Default to JSON
+    };
+
+    let mut file = File::create(path)?;
+    file.write_all(config_str.as_bytes())?;
+    println!("Generated default configuration file: {}", path.display());
+    Ok(())
+}
+
+fn matches_patterns(filename: &str, patterns: &[String]) -> bool {
+    if patterns.is_empty() {
+        return false;
     }
 
-    if let Some(ref mask_path) = args.mask {
-        if !mask_path.exists() {
-            eprintln!("Error: Mask file '{}' does not exist", mask_path.display());
-            std::process::exit(1);
+    patterns.iter().any(|pattern| {
+        if pattern.contains('*') {
+            // Simple glob matching
+            let pattern = pattern.replace('*', "");
+            if pattern.starts_with('.') {
+                filename.ends_with(&pattern)
+            } else {
+                filename.contains(&pattern)
+            }
+        } else {
+            filename == pattern
+        }
+    })
+}
+
+fn find_input_files(
+    input_path: &Path,
+    include_patterns: &[String],
+    exclude_patterns: &[String],
+) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let mut files = Vec::new();
+
+    if input_path.is_file() {
+        files.push(input_path.to_path_buf());
+    } else if input_path.is_dir() {
+        for entry in fs::read_dir(input_path)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.is_file() {
+                if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                    let matches_include = matches_patterns(filename, include_patterns);
+                    let matches_exclude = matches_patterns(filename, exclude_patterns);
+
+                    if matches_include && !matches_exclude {
+                        files.push(path);
+                    }
+                }
+            }
         }
     }
 
-    // Load texture image
-    let texture_image = image::open(&args.texture)
+    files.sort();
+    Ok(files)
+}
+
+#[derive(Debug)]
+struct ProcessingStats {
+    total_files: usize,
+    processed: usize,
+    failed: usize,
+    total_polygons: usize,
+}
+
+impl ProcessingStats {
+    fn new(total_files: usize) -> Self {
+        Self {
+            total_files,
+            processed: 0,
+            failed: 0,
+            total_polygons: 0,
+        }
+    }
+
+    fn print_progress(&self) {
+        println!(
+            "Progress: {}/{} files processed, {} failed, {} polygons generated",
+            self.processed + self.failed,
+            self.total_files,
+            self.failed,
+            self.total_polygons
+        );
+    }
+
+    fn print_summary(&self) {
+        println!("\n=== Processing Summary ===");
+        println!("Total files: {}", self.total_files);
+        println!("Successfully processed: {}", self.processed);
+        println!("Failed: {}", self.failed);
+        println!("Total polygons generated: {}", self.total_polygons);
+        println!("Success rate: {:.1}%",
+                 (self.processed as f64 / self.total_files as f64) * 100.0);
+    }
+}
+
+fn process_single_file(
+    texture_path: &Path,
+    mask_path: Option<&Path>,
+    output_dir: &Path,
+    config: &Config,
+    verbose: bool,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let texture_image = image::open(texture_path)
         .map_err(|e| format!("Failed to open texture image: {}", e))?;
 
     let (width, height) = texture_image.dimensions();
-    let asset_name = args.texture.file_stem()
+    let asset_name = texture_path.file_stem()
         .ok_or("Invalid texture filename")?
         .to_string_lossy();
 
-    if args.verbose {
-        println!("Loaded texture: {}x{} pixels", width, height);
+    if verbose {
+        println!("Processing: {} ({}x{} pixels)", texture_path.display(), width, height);
     }
 
     // Create or load binary mask
-    let binary = if let Some(mask_path) = &args.mask {
-        if args.verbose {
+    let binary = if let Some(mask_path) = mask_path {
+        if verbose {
             println!("Loading mask from: {}", mask_path.display());
         }
         let mask_image = image::open(mask_path)
             .map_err(|e| format!("Failed to open mask image: {}", e))?;
         BinaryImage::from_mask(mask_image.to_luma8())
     } else {
-        if args.verbose {
-            println!("Generating mask from texture using {:?} method", args.mask_method);
+        if verbose {
+            println!("Generating mask using {:?} method", config.processing.mask_method);
         }
-        generate_binary_mask(&texture_image, &args.mask_method, args.threshold)
+        generate_binary_mask(&texture_image, &config.processing.mask_method, config.processing.threshold)
     };
 
     // Create output directory
-    fs::create_dir_all(&args.output)
+    let file_output_dir = if config.output.create_subdirs {
+        output_dir.join(&asset_name.to_string())
+    } else {
+        output_dir.to_path_buf()
+    };
+
+    fs::create_dir_all(&file_output_dir)
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
 
     // Save original texture image
     let texture_filename = format!("{}_texture.png", asset_name);
-    let texture_path = args.output.join(&texture_filename);
+    let texture_path = file_output_dir.join(&texture_filename);
     save_uncompressed_png(&texture_path, &texture_image)?;
 
     // Save binary mask visualization
-    if !args.skip_intermediates {
+    if !config.output.skip_intermediates {
         let visual = ImageBuffer::from_fn(binary.width(), binary.height(), |x, y| {
             let pixel = binary.get_pixel(x, y);
             if *pixel {
@@ -178,123 +417,209 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
 
-        let mask_path = args.output.join(format!("{}_mask.png", asset_name));
-        save_uncompressed_png(&mask_path,  &DynamicImage::ImageLuma8(visual))?;
-
-        if args.verbose {
-            println!("Saved binary mask to: {}", mask_path.display());
-        }
+        let mask_path = file_output_dir.join(format!("{}_mask.png", asset_name));
+        save_uncompressed_png(&mask_path, &DynamicImage::ImageLuma8(visual))?;
     }
 
-    // Convert binary mask to polygons using Theo Pavlidis' contour tracing algorithm
-    let polygons: Vec<Polygon> = binary.trace_polygons(10);
+    // Convert binary mask to polygons
+    let polygons: Vec<Polygon> = binary.trace_polygons(config.processing.min_polygon_dimension);
 
-    if args.verbose {
-        println!("Found {} polygons", polygons.len());
+    if verbose {
+        println!("Found {} polygons for {}", polygons.len(), asset_name);
     }
 
+    // Process polygons
     for (i, polygon) in polygons.iter().enumerate() {
-        if args.verbose {
-            println!("Polygon {}: exterior_points={} interior_rings={}",
-                     i,
-                     polygon.exterior().points().count(),
-                     polygon.interiors().len()
-            );
-            for (j, interior) in polygon.interiors().iter().enumerate() {
-                println!("  interior_{}: points={}", j, interior.points().count());
-            }
-        }
-
-        if !args.skip_intermediates {
+        if !config.output.skip_intermediates {
             let result_img = polygon.draw(width, height);
-            let polygon_path = args.output.join(format!("{}_polygon_{}.png", asset_name, i));
+            let polygon_path = file_output_dir.join(format!("{}_polygon_{}.png", asset_name, i));
             result_img.save(&polygon_path)
                 .map_err(|e| format!("Failed to save polygon image: {}", e))?;
         }
     }
 
-    // Simplify the polygons using Ramer–Douglas–Peucker algorithm
+    // Simplify polygons
     let mut simplified_polygons: Vec<Polygon> = Vec::new();
-    for (i, polygon) in polygons.iter().enumerate() {
-        let simplified_polygon = polygon.simplify(&args.simplify_tolerance);
-
-        if args.verbose {
-            println!("Polygon {} simplified: {} -> {} points",
-                     i,
-                     polygon.exterior().points().count(),
-                     simplified_polygon.exterior().points().count()
-            );
-        }
-
-        if !args.skip_intermediates {
-            let result_img = simplified_polygon.draw(width, height);
-            let polygon_path = args.output.join(format!("{}_simplified_polygon_{}.png", asset_name, i));
-            result_img.save(&polygon_path)
-                .map_err(|e| format!("Failed to save simplified polygon image: {}", e))?;
-        }
-
+    for polygon in polygons.iter() {
+        let simplified_polygon = polygon.simplify(&config.processing.simplify_tolerance);
         simplified_polygons.push(simplified_polygon);
     }
 
-    // Smooth the polygons using Chaikin's algorithm
+    // Smooth polygons
     let mut smooth_polygons: Vec<Polygon> = Vec::new();
-    for (i, polygon) in simplified_polygons.iter().enumerate() {
-        let smooth_polygon = polygon.chaikin_smoothing(args.smooth_iterations);
-
-        if args.verbose {
-            println!("Polygon {} smoothed: {} -> {} points",
-                     i,
-                     polygon.exterior().points().count(),
-                     smooth_polygon.exterior().points().count()
-            );
-        }
-
-        if !args.skip_intermediates {
-            let result_img = smooth_polygon.draw(width, height);
-            let polygon_path = args.output.join(format!("{}_smooth_polygon_{}.png", asset_name, i));
-            result_img.save(&polygon_path)
-                .map_err(|e| format!("Failed to save smooth polygon image: {}", e))?;
-        }
-
+    for polygon in simplified_polygons.iter() {
+        let smooth_polygon = polygon.chaikin_smoothing(config.processing.smooth_iterations);
         smooth_polygons.push(smooth_polygon);
     }
 
-    // Create the meshes from the polygons
+    // Create meshes
     for (i, polygon) in smooth_polygons.iter().enumerate() {
         // Create 2D mesh
         let mesh2d = polygon.mesh2d()
             .map_err(|e| format!("Failed to create 2D mesh for polygon {}: {}", i, e))?;
 
-        let mesh2d_path = args.output.join(format!("{}_{}.2d.obj", asset_name, i));
+        let mesh2d_path = file_output_dir.join(format!("{}_{}.2d.obj", asset_name, i));
         mesh2d.export_obj(mesh2d_path.as_path())
             .map_err(|e| format!("Failed to export 2D mesh: {}", e))?;
 
         // Create 3D mesh
-        let mesh3d = mesh2d.extrude(args.extrude_height, width as f64, height as f64);
-        let mesh_path = args.output.join(format!("{}_{}.obj", asset_name, i));
-        let material_path = args.output.join(format!("{}_{}.mtl", asset_name, i));
+        let mesh3d = mesh2d.extrude(config.processing.extrude_height, width as f64, height as f64);
+        let mesh_path = file_output_dir.join(format!("{}_{}.obj", asset_name, i));
+        let material_path = file_output_dir.join(format!("{}_{}.mtl", asset_name, i));
 
         mesh3d.export_obj(
             mesh_path.as_path(),
             material_path.as_path(),
             &texture_filename,
-            &args.back_texture,
-            &args.side_texture
+            &config.output.back_texture,
+            &config.output.side_texture
         ).map_err(|e| format!("Failed to export 3D mesh: {}", e))?;
+    }
 
-        if args.verbose {
-            println!("Exported mesh {} to: {}", i, mesh_path.display());
+    Ok(smooth_polygons.len())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
+
+    // Handle config generation
+    if args.generate_config {
+        let config_path = args.config.unwrap_or_else(|| PathBuf::from("mesh_config.json"));
+        save_default_config(&config_path)?;
+        return Ok(());
+    }
+
+    // Load configuration
+    let mut config = if let Some(config_path) = &args.config {
+        load_config(config_path)?
+    } else {
+        Config::default()
+    };
+
+    // Override config with command line arguments
+    if let Some(input) = args.input {
+        config.input.input = input;
+    }
+    if args.mask.is_some() {
+        config.input.mask = args.mask;
+    }
+    if args.simplify_tolerance != 10.0 {
+        config.processing.simplify_tolerance = args.simplify_tolerance;
+    }
+    if args.smooth_iterations != 1 {
+        config.processing.smooth_iterations = args.smooth_iterations;
+    }
+    if args.extrude_height != 20.0 {
+        config.processing.extrude_height = args.extrude_height;
+    }
+    if args.threshold != 128 {
+        config.processing.threshold = args.threshold;
+    }
+    if args.workers != 1 {
+        config.batch.workers = args.workers;
+    }
+    if let Some(output) = args.output {
+        config.output.output_folder = output;
+    }
+    config.batch.continue_on_error = args.continue_on_error;
+    config.output.skip_intermediates = args.skip_intermediates;
+
+    // Parse include patterns from command line
+    let include_patterns: Vec<String> = args.include_patterns
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .collect();
+
+    let mut exclude_patterns: Vec<String> = args.exclude_patterns
+        .map(|s| s.split(',').map(|p| p.trim().to_string()).collect())
+        .unwrap_or_default();
+
+    exclude_patterns.push("*_mask*".to_string());
+
+    // Find input files
+    let input_files = find_input_files(&config.input.input, &include_patterns, &exclude_patterns)?;
+
+    if input_files.is_empty() {
+        eprintln!("No input files found matching the criteria");
+        std::process::exit(1);
+    }
+    
+    let batch = config.input.input.is_dir();
+
+    if args.verbose {
+        println!("Found {} input files", input_files.len());
+        for file in &input_files {
+            println!("  - {}", file.display());
         }
     }
 
-    println!("Successfully generated {} meshes in: {}", smooth_polygons.len(), args.output.display());
+    // Create output directory
+    fs::create_dir_all(&config.output.output_folder)
+        .map_err(|e| format!("Failed to create output directory: {}", e))?;
+
+    let mut stats = ProcessingStats::new(input_files.len());
+
+    // Process files
+    if config.batch.workers > 1 {
+        // TODO: Implement parallel processing using rayon or similar
+        println!("Parallel processing not yet implemented, processing sequentially...");
+    }
+
+    // Sequential processing
+    for input_file in &input_files {
+        let mask = if batch {
+            let stem = input_file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let mask_filename = format!("{}_mask.png", stem);
+            let mask_path = input_file.with_file_name(mask_filename);
+            if !mask_path.exists() { None } else { Some(mask_path) }
+        }
+        else {
+            config.input.mask.clone()
+        };
+        
+        match process_single_file(
+            &input_file,
+            mask.as_deref(),
+            &config.output.output_folder,
+            &config,
+            args.verbose,
+        ) {
+            Ok(polygon_count) => {
+                stats.processed += 1;
+                stats.total_polygons += polygon_count;
+                if args.verbose {
+                    println!("Successfully processed: {} ({} polygons)",
+                             input_file.display(), polygon_count);
+                }
+            }
+            Err(e) => {
+                stats.failed += 1;
+                eprintln!("Failed to process {}: {}", input_file.display(), e);
+                if !config.batch.continue_on_error {
+                    return Err(e);
+                }
+            }
+        }
+
+        if args.verbose && input_files.len() > 1 {
+            stats.print_progress();
+        }
+    }
+
+    // Print final summary
+    if input_files.len() > 1 {
+        stats.print_summary();
+    } else {
+        println!("Successfully generated {} meshes in: {}",
+                 stats.total_polygons, config.output.output_folder.display());
+    }
+
     Ok(())
 }
 
 fn generate_binary_mask(image: &DynamicImage, method: &MaskMethod, threshold: u8) -> BinaryImage {
     match method {
         MaskMethod::Luminance => {
-            // Convert to grayscale and threshold
             let gray = image.to_luma8();
             let binary_data: Vec<u8> = gray.pixels()
                 .map(|pixel| if pixel.0[0] > threshold { 255 } else { 0 })
@@ -304,28 +629,28 @@ fn generate_binary_mask(image: &DynamicImage, method: &MaskMethod, threshold: u8
         MaskMethod::Alpha => {
             let rgba = image.to_rgba8();
             let binary_data: Vec<u8> = rgba.pixels()
-                .map(|pixel| if pixel.0[3] > threshold { 255 } else { 0 }) // Alpha channel
+                .map(|pixel| if pixel.0[3] > threshold { 255 } else { 0 })
                 .collect();
             BinaryImage::from_raw(rgba.width(), rgba.height(), &binary_data)
         },
         MaskMethod::Red => {
             let rgb = image.to_rgb8();
             let binary_data: Vec<u8> = rgb.pixels()
-                .map(|pixel| if pixel.0[0] > threshold { 255 } else { 0 }) // Red channel
+                .map(|pixel| if pixel.0[0] > threshold { 255 } else { 0 })
                 .collect();
             BinaryImage::from_raw(rgb.width(), rgb.height(), &binary_data)
         },
         MaskMethod::Green => {
             let rgb = image.to_rgb8();
             let binary_data: Vec<u8> = rgb.pixels()
-                .map(|pixel| if pixel.0[1] > threshold { 255 } else { 0 }) // Green channel
+                .map(|pixel| if pixel.0[1] > threshold { 255 } else { 0 })
                 .collect();
             BinaryImage::from_raw(rgb.width(), rgb.height(), &binary_data)
         },
         MaskMethod::Blue => {
             let rgb = image.to_rgb8();
             let binary_data: Vec<u8> = rgb.pixels()
-                .map(|pixel| if pixel.0[2] > threshold { 255 } else { 0 }) // Blue channel
+                .map(|pixel| if pixel.0[2] > threshold { 255 } else { 0 })
                 .collect();
             BinaryImage::from_raw(rgb.width(), rgb.height(), &binary_data)
         },
