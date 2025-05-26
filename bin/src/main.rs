@@ -1,15 +1,15 @@
-use mimesis::draw::DrawMesh;
-use mimesis::mesh::PolygonMesh;
+mod config;
+mod processing;
+
 use std::fs;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use image::{Luma, ImageBuffer, GenericImageView, DynamicImage, ImageEncoder, ExtendedColorType, ImageResult};
-use geo::{ChaikinSmoothing, Polygon, Simplify};
+use image::DynamicImage;
 use mimesis::BinaryImage;
-use clap::{Parser, ValueEnum};
-use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use serde::{Deserialize, Serialize};
+use clap::Parser;
 use std::io::Write;
+use crate::config::{Config, MaskMethod};
+use crate::processing::Processor;
 
 #[derive(Parser)]
 #[command(name = "mesh-generator")]
@@ -89,152 +89,8 @@ struct Args {
     skip_intermediates: Option<bool>,
 
     /// Verbose output
-    #[arg(short, long, default_value = "false")]
+    #[arg(long)]
     verbose: bool,
-}
-
-#[derive(Clone, ValueEnum, Debug, Serialize, Deserialize)]
-enum MaskMethod {
-    /// Use luminance/brightness to generate mask
-    Luminance,
-    /// Use alpha channel to generate mask
-    Alpha,
-    /// Use red channel to generate mask
-    Red,
-    /// Use green channel to generate mask
-    Green,
-    /// Use blue channel to generate mask
-    Blue,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Config {
-    /// Innput setting
-    pub input: InputConfig,
-    /// Processing parameters
-    pub processing: ProcessingConfig,
-    /// Batch processing settings
-    pub batch: BatchConfig,
-    /// Output settings
-    pub output: OutputConfig,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct InputConfig {
-    /// Input image file path or directory path
-    pub input: PathBuf,
-    /// Optional binary mask image path
-    pub mask: Option<PathBuf>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ProcessingConfig {
-    /// Simplification tolerance for Ramer-Douglas-Peucker algorithm
-    pub simplify_tolerance: f64,
-    /// Number of Chaikin smoothing iterations
-    pub smooth_iterations: usize,
-    /// Extrusion height for 3D mesh
-    pub extrude_height: f64,
-    /// Minimum polygon dimension (in pixels)
-    pub min_polygon_dimension: usize,
-    /// Threshold for binary mask generation (0-255)
-    pub threshold: u8,
-    /// Method for generating binary mask from texture
-    pub mask_method: MaskMethod,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct BatchConfig {
-    /// File patterns to include in batch processing
-    pub include_patterns: Vec<String>,
-    /// File patterns to exclude from batch processing
-    pub exclude_patterns: Vec<String>,
-    /// Number of parallel workers for batch processing
-    pub workers: usize,
-    /// Continue batch processing even if some files fail
-    pub continue_on_error: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct OutputConfig {
-    /// Output folder for processed files
-    pub output_folder: PathBuf,
-    /// Side texture path for OBJ export
-    pub side_texture: Option<PathBuf>,
-    /// Back texture path for OBJ export
-    pub back_texture: Option<PathBuf>,
-    /// Skip saving intermediate polygon images
-    pub skip_intermediates: bool,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            input: InputConfig {
-                input: PathBuf::from("texture.png"),
-                mask: None,
-            },
-            processing: ProcessingConfig {
-                simplify_tolerance: 10.0,
-                smooth_iterations: 1,
-                extrude_height: 20.0,
-                min_polygon_dimension: 0,
-                threshold: 128,
-                mask_method: MaskMethod::Alpha,
-            },
-            batch: BatchConfig {
-                include_patterns: vec![
-                    "*.png".to_string(),
-                    "*.jpg".to_string(),
-                    "*.jpeg".to_string(),
-                    "*.bmp".to_string(),
-                    "*.tiff".to_string(),
-                    "*.tga".to_string(),
-                ],
-                exclude_patterns: vec![],
-                workers: 1,
-                continue_on_error: false,
-            },
-            output: OutputConfig {
-                output_folder: PathBuf::from("output"),
-                side_texture: None,
-                back_texture: None,
-                skip_intermediates: false,
-            },
-        }
-    }
-}
-
-fn get_extended_color_type(image: &DynamicImage) -> ExtendedColorType {
-    match image {
-        DynamicImage::ImageLuma8(_) => ExtendedColorType::L8,
-        DynamicImage::ImageLumaA8(_) => ExtendedColorType::La8,
-        DynamicImage::ImageRgb8(_) => ExtendedColorType::Rgb8,
-        DynamicImage::ImageRgba8(_) => ExtendedColorType::Rgba8,
-        DynamicImage::ImageLuma16(_) => ExtendedColorType::L16,
-        DynamicImage::ImageLumaA16(_) => ExtendedColorType::La16,
-        DynamicImage::ImageRgb16(_) => ExtendedColorType::Rgb16,
-        DynamicImage::ImageRgba16(_) => ExtendedColorType::Rgba16,
-        _ => panic!("Unsupported DynamicImage format"),
-    }
-}
-
-fn save_uncompressed_png<P: AsRef<Path>>(
-    path: P,
-    image: &DynamicImage,
-) -> ImageResult<()> {
-    let file = File::create(path)?;
-    let encoder = PngEncoder::new_with_quality(
-        file,
-        CompressionType::Best,
-        FilterType::NoFilter,
-    );
-    encoder.write_image(
-        image.as_bytes(),
-        image.width(),
-        image.height(),
-        get_extended_color_type(image),
-    )
 }
 
 fn load_config(config_path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
@@ -351,157 +207,6 @@ impl ProcessingStats {
     }
 }
 
-fn process_single_file(
-    texture_path: &Path,
-    mask_path: Option<&Path>,
-    output_dir: &Path,
-    config: &Config,
-    verbose: bool,
-) -> Result<usize, Box<dyn std::error::Error>> {
-    let texture_image = image::open(texture_path)
-        .map_err(|e| format!("Failed to open texture image: {}", e))?;
-
-    let (width, height) = texture_image.dimensions();
-    let asset_name = texture_path.file_stem()
-        .ok_or("Invalid texture filename")?
-        .to_string_lossy();
-
-    if verbose {
-        println!("Processing: {} ({}x{} pixels)", texture_path.display(), width, height);
-    }
-
-    // Create or load binary mask
-    let binary = if let Some(mask_path) = mask_path {
-        if verbose {
-            println!("Loading mask from: {}", mask_path.display());
-        }
-        let mask_image = image::open(mask_path)
-            .map_err(|e| format!("Failed to open mask image: {}", e))?;
-        BinaryImage::from_mask(mask_image.to_luma8())
-    } else {
-        if verbose {
-            println!("Generating mask using {:?} method", config.processing.mask_method);
-        }
-        generate_binary_mask(&texture_image, &config.processing.mask_method, config.processing.threshold)
-    };
-
-    // Create output directory
-    let file_output_dir = output_dir.to_path_buf();
-    let textures_output_dir = file_output_dir.join("textures");
-
-    fs::create_dir_all(&textures_output_dir)
-        .map_err(|e| format!("Failed to create output directory: {}", e))?;
-
-    // Save original texture image
-    let front_texture_filename = format!("{}.png", asset_name);
-    let texture_path = textures_output_dir.join(&front_texture_filename);
-    save_uncompressed_png(&texture_path, &texture_image)?;
-
-    let side_texture_filename = if let Some(side_texture_path) = &config.output.side_texture {
-        let filename = "side.png".to_string();
-        fs::copy(&side_texture_path, textures_output_dir.join(&filename))
-            .map_err(|e| format!("Failed to copy side texture: {}", e))?;
-        filename
-    } else {
-        front_texture_filename.clone()
-    };
-
-    let back_texture_filename = if let Some(back_texture_path) = &config.output.back_texture {
-        let filename = "back.png".to_string();
-        fs::copy(&back_texture_path, textures_output_dir.join(&filename))
-            .map_err(|e| format!("Failed to copy back texture: {}", e))?;
-        filename
-    } else {
-        front_texture_filename.clone()
-    };
-
-    // Save binary mask visualization
-    if !config.output.skip_intermediates {
-        let visual = ImageBuffer::from_fn(binary.width(), binary.height(), |x, y| {
-            let pixel = binary.get_pixel(x, y);
-            if *pixel {
-                Luma([255u8])
-            } else {
-                Luma([0u8])
-            }
-        });
-
-        let mask_path = file_output_dir.join(format!("{}_mask.png", asset_name));
-        save_uncompressed_png(&mask_path, &DynamicImage::ImageLuma8(visual))?;
-    }
-
-    // Convert binary mask to polygons
-    let polygons: Vec<Polygon> = binary.trace_polygons(config.processing.min_polygon_dimension);
-
-    if verbose {
-        println!("Found {} polygons for {}", polygons.len(), asset_name);
-    }
-
-    // Process polygons
-    for (i, polygon) in polygons.iter().enumerate() {
-        if !config.output.skip_intermediates {
-            let result_img = polygon.draw(width, height);
-            let polygon_path = file_output_dir.join(format!("{}_polygon_{}.png", asset_name, i));
-            result_img.save(&polygon_path)
-                .map_err(|e| format!("Failed to save polygon image: {}", e))?;
-        }
-    }
-
-    // Simplify polygons
-    let simplified_polygons: Vec<Polygon> = if config.processing.simplify_tolerance <= 0f64 {
-        polygons
-    }
-    else {
-        let mut simplified_polygons: Vec<Polygon> = Vec::new();
-        for polygon in polygons.iter() {
-            let simplified_polygon = polygon.simplify(&config.processing.simplify_tolerance);
-            simplified_polygons.push(simplified_polygon);
-        }
-        simplified_polygons
-    };
-
-    // Smooth polygons
-    let smooth_polygons: Vec<Polygon> = if config.processing.smooth_iterations <= 0 {
-        simplified_polygons
-    }
-    else {
-        let mut smooth_polygons: Vec<Polygon> = Vec::new();
-        for polygon in simplified_polygons.iter() {
-            let smooth_polygon = polygon.chaikin_smoothing(config.processing.smooth_iterations);
-            smooth_polygons.push(smooth_polygon);
-        }
-        smooth_polygons
-    };
-    
-    // Create meshes
-    for (i, polygon) in smooth_polygons.iter().enumerate() {
-        // Create 2D mesh
-        let mesh2d = polygon.mesh2d()
-            .map_err(|e| format!("Failed to create 2D mesh for polygon {}: {}", i, e))?;
-
-        if !config.output.skip_intermediates {
-            let mesh2d_path = file_output_dir.join(format!("{}_{}.2d.obj", asset_name, i));
-            mesh2d.export_obj(mesh2d_path.as_path())
-                .map_err(|e| format!("Failed to export 2D mesh: {}", e))?;
-        }
-
-        // Create 3D mesh
-        let mesh3d = mesh2d.extrude(config.processing.extrude_height, width as f64, height as f64);
-        let mesh_path = file_output_dir.join(format!("{}_{}.obj", asset_name, i));
-        let material_path = file_output_dir.join(format!("{}_{}.mtl", asset_name, i));
-
-        mesh3d.export_obj(
-            mesh_path.as_path(),
-            material_path.as_path(),
-            &front_texture_filename,
-            &back_texture_filename,
-            &side_texture_filename
-        ).map_err(|e| format!("Failed to export 3D mesh: {}", e))?;
-    }
-
-    Ok(smooth_polygons.len())
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
@@ -537,6 +242,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(threshold) = args.threshold {
         config.processing.threshold = threshold;
+    }
+    if args.verbose {
+        config.processing.verbose = true;
     }
     if let Some(workers) = args.workers {
         config.batch.workers = workers;
@@ -579,7 +287,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let batch = config.input.input.is_dir();
 
-    if args.verbose {
+    if config.processing.verbose {
         println!("Found {} input files", input_files.len());
         for file in &input_files {
             println!("  - {}", file.display());
@@ -598,6 +306,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Parallel processing not yet implemented, processing sequentially...");
     }
 
+    let processor = Processor::new(config.clone());
+
     // Sequential processing
     for input_file in &input_files {
         let mask = if batch {
@@ -610,17 +320,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             config.input.mask.clone()
         };
 
-        match process_single_file(
-            &input_file,
-            mask.as_deref(),
-            &config.output.output_folder,
-            &config,
-            args.verbose,
-        ) {
+        match processor.process(&input_file, mask.as_deref()) {
             Ok(polygon_count) => {
                 stats.processed += 1;
                 stats.total_polygons += polygon_count;
-                if args.verbose {
+                if config.processing.verbose {
                     println!("Successfully processed: {} ({} polygons)",
                              input_file.display(), polygon_count);
                 }
@@ -629,12 +333,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 stats.failed += 1;
                 eprintln!("Failed to process {}: {}", input_file.display(), e);
                 if !config.batch.continue_on_error {
-                    return Err(e);
+                    return Err(e.into());
                 }
             }
         }
 
-        if args.verbose && input_files.len() > 1 {
+        if config.processing.verbose && input_files.len() > 1 {
             stats.print_progress();
         }
     }
