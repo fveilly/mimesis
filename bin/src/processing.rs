@@ -7,40 +7,7 @@ use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use mimesis::{BinaryImage, error::Error};
 use mimesis::draw::DrawMesh;
 use mimesis::mesh::PolygonMesh;
-use crate::config::Config;
-use crate::{generate_binary_mask};
-
-fn get_extended_color_type(image: &DynamicImage) -> ExtendedColorType {
-    match image {
-        DynamicImage::ImageLuma8(_) => ExtendedColorType::L8,
-        DynamicImage::ImageLumaA8(_) => ExtendedColorType::La8,
-        DynamicImage::ImageRgb8(_) => ExtendedColorType::Rgb8,
-        DynamicImage::ImageRgba8(_) => ExtendedColorType::Rgba8,
-        DynamicImage::ImageLuma16(_) => ExtendedColorType::L16,
-        DynamicImage::ImageLumaA16(_) => ExtendedColorType::La16,
-        DynamicImage::ImageRgb16(_) => ExtendedColorType::Rgb16,
-        DynamicImage::ImageRgba16(_) => ExtendedColorType::Rgba16,
-        _ => panic!("Unsupported DynamicImage format"),
-    }
-}
-
-fn save_uncompressed_png<P: AsRef<Path>>(
-    path: P,
-    image: &DynamicImage,
-) -> ImageResult<()> {
-    let file = File::create(path)?;
-    let encoder = PngEncoder::new_with_quality(
-        file,
-        CompressionType::Best,
-        FilterType::NoFilter,
-    );
-    encoder.write_image(
-        image.as_bytes(),
-        image.width(),
-        image.height(),
-        get_extended_color_type(image),
-    )
-}
+use crate::config::{Config, MaskMethod};
 
 pub(crate) struct Processor {
     config: Config
@@ -80,7 +47,7 @@ impl Processor {
             if verbose {
                 println!("Generating mask using {:?} method", self.config.processing.mask_method);
             }
-            generate_binary_mask(&texture_image, &self.config.processing.mask_method, self.config.processing.threshold)
+            Self::generate_binary_mask(&texture_image, &self.config.processing.mask_method, self.config.processing.threshold)
         };
 
         // Create output directory
@@ -93,7 +60,7 @@ impl Processor {
         // Save original texture image
         let front_texture_filename = format!("{}.png", asset_name);
         let texture_path = textures_output_dir.join(&front_texture_filename);
-        save_uncompressed_png(&texture_path, &texture_image)
+        Self::save_uncompressed_png(&texture_path, &texture_image)
             .map_err(|e| Error::Custom(format!("Failed to save texture: {}", e)))?;
 
         let side_texture_filename = if let Some(side_texture_path) = &self.config.output.side_texture {
@@ -126,7 +93,7 @@ impl Processor {
             });
 
             let mask_path = file_output_dir.join(format!("{}_mask.png", asset_name));
-            save_uncompressed_png(&mask_path, &DynamicImage::ImageLuma8(visual))
+            Self::save_uncompressed_png(&mask_path, &DynamicImage::ImageLuma8(visual))
                 .map_err(|e| Error::Custom(format!("Failed to save mask: {}", e)))?;
         }
 
@@ -200,5 +167,77 @@ impl Processor {
         }
 
         Ok(smooth_polygons.len())
+    }
+
+    fn generate_binary_mask(image: &DynamicImage, method: &MaskMethod, threshold: u8) -> BinaryImage {
+        match method {
+            MaskMethod::Luminance => {
+                let gray = image.to_luma8();
+                let binary_data: Vec<u8> = gray.pixels()
+                    .map(|pixel| if pixel.0[0] > threshold { 255 } else { 0 })
+                    .collect();
+                BinaryImage::from_raw(gray.width(), gray.height(), &binary_data)
+            },
+            MaskMethod::Alpha => {
+                let rgba = image.to_rgba8();
+                let binary_data: Vec<u8> = rgba.pixels()
+                    .map(|pixel| if pixel.0[3] > threshold { 255 } else { 0 })
+                    .collect();
+                BinaryImage::from_raw(rgba.width(), rgba.height(), &binary_data)
+            },
+            MaskMethod::Red => {
+                let rgb = image.to_rgb8();
+                let binary_data: Vec<u8> = rgb.pixels()
+                    .map(|pixel| if pixel.0[0] > threshold { 255 } else { 0 })
+                    .collect();
+                BinaryImage::from_raw(rgb.width(), rgb.height(), &binary_data)
+            },
+            MaskMethod::Green => {
+                let rgb = image.to_rgb8();
+                let binary_data: Vec<u8> = rgb.pixels()
+                    .map(|pixel| if pixel.0[1] > threshold { 255 } else { 0 })
+                    .collect();
+                BinaryImage::from_raw(rgb.width(), rgb.height(), &binary_data)
+            },
+            MaskMethod::Blue => {
+                let rgb = image.to_rgb8();
+                let binary_data: Vec<u8> = rgb.pixels()
+                    .map(|pixel| if pixel.0[2] > threshold { 255 } else { 0 })
+                    .collect();
+                BinaryImage::from_raw(rgb.width(), rgb.height(), &binary_data)
+            },
+        }
+    }
+
+    fn get_extended_color_type(image: &DynamicImage) -> ExtendedColorType {
+        match image {
+            DynamicImage::ImageLuma8(_) => ExtendedColorType::L8,
+            DynamicImage::ImageLumaA8(_) => ExtendedColorType::La8,
+            DynamicImage::ImageRgb8(_) => ExtendedColorType::Rgb8,
+            DynamicImage::ImageRgba8(_) => ExtendedColorType::Rgba8,
+            DynamicImage::ImageLuma16(_) => ExtendedColorType::L16,
+            DynamicImage::ImageLumaA16(_) => ExtendedColorType::La16,
+            DynamicImage::ImageRgb16(_) => ExtendedColorType::Rgb16,
+            DynamicImage::ImageRgba16(_) => ExtendedColorType::Rgba16,
+            _ => panic!("Unsupported DynamicImage format"),
+        }
+    }
+
+    fn save_uncompressed_png<P: AsRef<Path>>(
+        path: P,
+        image: &DynamicImage,
+    ) -> ImageResult<()> {
+        let file = File::create(path)?;
+        let encoder = PngEncoder::new_with_quality(
+            file,
+            CompressionType::Best,
+            FilterType::NoFilter,
+        );
+        encoder.write_image(
+            image.as_bytes(),
+            image.width(),
+            image.height(),
+            Self::get_extended_color_type(image),
+        )
     }
 }

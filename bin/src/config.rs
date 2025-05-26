@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::fs;
+use std::fs::File;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
@@ -136,4 +139,32 @@ impl Default for Config {
             },
         }
     }
+}
+
+impl Config {
+    
+    pub fn load(config_path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
+        let config_str = fs::read_to_string(config_path)?;
+        let config: Config = match config_path.extension().and_then(|s| s.to_str()) {
+            Some("json") => serde_json::from_str(&config_str)?,
+            Some("toml") => toml::from_str(&config_str)?,
+            _ => return Err("Unsupported config file format. Use .json, .toml, or .yaml".into()),
+        };
+        Ok(config)
+    }
+    
+    pub fn save_default(config_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        let config = Config::default();
+        let config_str = match config_path.extension().and_then(|s| s.to_str()) {
+            Some("json") => serde_json::to_string_pretty(&config)?,
+            Some("toml") => toml::to_string_pretty(&config)?,
+            _ => serde_json::to_string_pretty(&config)?, // Default to JSON
+        };
+
+        let mut file = File::create(config_path)?;
+        file.write_all(config_str.as_bytes())?;
+        println!("Generated default configuration file: {}", config_path.display());
+        Ok(())
+    }
+    
 }

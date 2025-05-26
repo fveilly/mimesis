@@ -1,15 +1,13 @@
 mod config;
 mod processing;
+mod stats;
 
 use std::fs;
-use std::fs::File;
 use std::path::{Path, PathBuf};
-use image::DynamicImage;
-use mimesis::BinaryImage;
 use clap::Parser;
-use std::io::Write;
 use crate::config::{Config, MaskMethod};
 use crate::processing::Processor;
+use crate::stats::ProcessingStats;
 
 #[derive(Parser)]
 #[command(name = "mesh-generator")]
@@ -93,30 +91,6 @@ struct Args {
     verbose: bool,
 }
 
-fn load_config(config_path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
-    let config_str = fs::read_to_string(config_path)?;
-    let config: Config = match config_path.extension().and_then(|s| s.to_str()) {
-        Some("json") => serde_json::from_str(&config_str)?,
-        Some("toml") => toml::from_str(&config_str)?,
-        _ => return Err("Unsupported config file format. Use .json, .toml, or .yaml".into()),
-    };
-    Ok(config)
-}
-
-fn save_default_config(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let config = Config::default();
-    let config_str = match path.extension().and_then(|s| s.to_str()) {
-        Some("json") => serde_json::to_string_pretty(&config)?,
-        Some("toml") => toml::to_string_pretty(&config)?,
-        _ => serde_json::to_string_pretty(&config)?, // Default to JSON
-    };
-
-    let mut file = File::create(path)?;
-    file.write_all(config_str.as_bytes())?;
-    println!("Generated default configuration file: {}", path.display());
-    Ok(())
-}
-
 fn matches_patterns(filename: &str, patterns: &[String]) -> bool {
     if patterns.is_empty() {
         return false;
@@ -168,58 +142,19 @@ fn find_input_files(
     Ok(files)
 }
 
-#[derive(Debug)]
-struct ProcessingStats {
-    total_files: usize,
-    processed: usize,
-    failed: usize,
-    total_polygons: usize,
-}
-
-impl ProcessingStats {
-    fn new(total_files: usize) -> Self {
-        Self {
-            total_files,
-            processed: 0,
-            failed: 0,
-            total_polygons: 0,
-        }
-    }
-
-    fn print_progress(&self) {
-        println!(
-            "Progress: {}/{} files processed, {} failed, {} polygons generated",
-            self.processed + self.failed,
-            self.total_files,
-            self.failed,
-            self.total_polygons
-        );
-    }
-
-    fn print_summary(&self) {
-        println!("\n=== Processing Summary ===");
-        println!("Total files: {}", self.total_files);
-        println!("Successfully processed: {}", self.processed);
-        println!("Failed: {}", self.failed);
-        println!("Total polygons generated: {}", self.total_polygons);
-        println!("Success rate: {:.1}%",
-                 (self.processed as f64 / self.total_files as f64) * 100.0);
-    }
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     // Handle config generation
     if args.generate_config {
         let config_path = args.config.unwrap_or_else(|| PathBuf::from("mesh_config.json"));
-        save_default_config(&config_path)?;
+        Config::save_default(&config_path)?;
         return Ok(());
     }
 
     // Load configuration
     let mut config = if let Some(config_path) = &args.config {
-        load_config(config_path)?
+        Config::load(config_path)?
     } else {
         Config::default()
     };
@@ -352,44 +287,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-}
-
-fn generate_binary_mask(image: &DynamicImage, method: &MaskMethod, threshold: u8) -> BinaryImage {
-    match method {
-        MaskMethod::Luminance => {
-            let gray = image.to_luma8();
-            let binary_data: Vec<u8> = gray.pixels()
-                .map(|pixel| if pixel.0[0] > threshold { 255 } else { 0 })
-                .collect();
-            BinaryImage::from_raw(gray.width(), gray.height(), &binary_data)
-        },
-        MaskMethod::Alpha => {
-            let rgba = image.to_rgba8();
-            let binary_data: Vec<u8> = rgba.pixels()
-                .map(|pixel| if pixel.0[3] > threshold { 255 } else { 0 })
-                .collect();
-            BinaryImage::from_raw(rgba.width(), rgba.height(), &binary_data)
-        },
-        MaskMethod::Red => {
-            let rgb = image.to_rgb8();
-            let binary_data: Vec<u8> = rgb.pixels()
-                .map(|pixel| if pixel.0[0] > threshold { 255 } else { 0 })
-                .collect();
-            BinaryImage::from_raw(rgb.width(), rgb.height(), &binary_data)
-        },
-        MaskMethod::Green => {
-            let rgb = image.to_rgb8();
-            let binary_data: Vec<u8> = rgb.pixels()
-                .map(|pixel| if pixel.0[1] > threshold { 255 } else { 0 })
-                .collect();
-            BinaryImage::from_raw(rgb.width(), rgb.height(), &binary_data)
-        },
-        MaskMethod::Blue => {
-            let rgb = image.to_rgb8();
-            let binary_data: Vec<u8> = rgb.pixels()
-                .map(|pixel| if pixel.0[2] > threshold { 255 } else { 0 })
-                .collect();
-            BinaryImage::from_raw(rgb.width(), rgb.height(), &binary_data)
-        },
-    }
 }
