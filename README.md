@@ -86,10 +86,6 @@ Use configuration file:
 - `--generate-config` - Generate default config file and exit
 - `-v, --verbose` - Verbose output
 
-## Configuration File Format
-
-The tool supports JSON, YAML, and TOML configuration files:
-
 ## Mask Generation Methods
 
 When no mask is provided, the tool can auto-generate binary masks using:
@@ -179,7 +175,6 @@ input/
 
 ### Configuration Files
 - JSON (.json)
-- YAML (.yaml, .yml)
 - TOML (.toml)
 
 ## Performance Tips

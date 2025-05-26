@@ -3,11 +3,10 @@ use mimesis::mesh::PolygonMesh;
 use std::fs;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use image::{Luma, ImageBuffer, GenericImageView, DynamicImage, ImageFormat, ImageEncoder, ExtendedColorType, ImageResult};
+use image::{Luma, ImageBuffer, GenericImageView, DynamicImage, ImageEncoder, ExtendedColorType, ImageResult};
 use geo::{ChaikinSmoothing, Polygon, Simplify};
 use mimesis::BinaryImage;
 use clap::{Parser, ValueEnum};
-use clap::error::ErrorKind::Format;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -243,7 +242,6 @@ fn load_config(config_path: &Path) -> Result<Config, Box<dyn std::error::Error>>
     let config: Config = match config_path.extension().and_then(|s| s.to_str()) {
         Some("json") => serde_json::from_str(&config_str)?,
         Some("toml") => toml::from_str(&config_str)?,
-        Some("yaml") | Some("yml") => serde_yaml::from_str(&config_str)?,
         _ => return Err("Unsupported config file format. Use .json, .toml, or .yaml".into()),
     };
     Ok(config)
@@ -254,7 +252,6 @@ fn save_default_config(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let config_str = match path.extension().and_then(|s| s.to_str()) {
         Some("json") => serde_json::to_string_pretty(&config)?,
         Some("toml") => toml::to_string_pretty(&config)?,
-        Some("yaml") | Some("yml") => serde_yaml::to_string(&config)?,
         _ => serde_json::to_string_pretty(&config)?, // Default to JSON
     };
 

@@ -1,5 +1,5 @@
 use crate::binary_image::BinaryImage;
-use geo::{Polygon, LineString, Coord, Contains, BoundingRect};
+use geo::{Polygon, LineString, Coord, BoundingRect};
 
 const O_VERTEX_WITH_BORDER: [(i8, i8); 7] = [(-1, 0), (0, 0), (-1, -1), (0, 0), (0, -1), (0, 0), (0, 0)]; // Bottom left coordinates with a border
 const H_VERTEX_WITH_BORDER: [(i8, i8); 7] = [(0, 0), (0, 0), (-1, 0), (0, 0), (-1, -1), (0, 0), (0, -1)]; // Bottom right coordinates with a border

@@ -1,9 +1,8 @@
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use earcutr::{earcut};
-use geo::{BoundingRect, Polygon};
+use earcutr::earcut;
+use geo::Polygon;
 use crate::error::Error;
 
 #[derive(Debug, Clone)]
@@ -147,14 +146,6 @@ impl Mesh2D {
         let mut back_indices = Vec::new();
         let mut side_indices = Vec::new();
 
-        // Compute bounding box for UV normalization
-        let (min_x, max_x) = self.vertices.iter()
-            .map(|v| v[0])
-            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), x| (min.min(x), max.max(x)));
-        let (min_y, max_y) = self.vertices.iter()
-            .map(|v| v[1])
-            .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), y| (min.min(y), max.max(y)));
-
         // Create bottom vertices (front face) - indices 0..n-1
         for [x, y] in &self.vertices {
             vertices.push([*x, -*y, 0.0]);
@@ -261,34 +252,6 @@ impl Mesh2D {
 
 pub trait PolygonMesh {
     fn mesh2d(&self) -> Result<Mesh2D, Error>;
-}
-
-
-// Helper function to check if a ring is counter-clockwise
-fn is_counter_clockwise(ring: &[[f64; 2]]) -> bool {
-    if ring.len() < 3 {
-        return true;
-    }
-
-    let mut signed_area = 0.0;
-    for i in 0..ring.len() {
-        let j = (i + 1) % ring.len();
-        signed_area += (ring[j][0] - ring[i][0]) * (ring[j][1] + ring[i][1]);
-    }
-    signed_area < 0.0
-}
-
-// Helper function to reverse coordinate pairs in a flat coordinate array
-fn reverse_ring(coords: &mut [f64]) {
-    let pairs: Vec<[f64; 2]> = coords
-        .chunks_exact(2)
-        .map(|chunk| [chunk[0], chunk[1]])
-        .collect();
-
-    for (i, pair) in pairs.iter().rev().enumerate() {
-        coords[i * 2] = pair[0];
-        coords[i * 2 + 1] = pair[1];
-    }
 }
 
 impl PolygonMesh for Polygon {

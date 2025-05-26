@@ -1,6 +1,6 @@
 use std::ops::Deref;
 use bit_vec::BitVec;
-use image::{DynamicImage, GenericImage, GenericImageView, GrayImage, Pixel};
+use image::{GenericImage, GenericImageView, GrayImage, Pixel};
 use num_traits::{ToPrimitive, Zero};
 use crate::pixel::Bit;
 
@@ -103,7 +103,9 @@ impl GenericImageView for BinaryImage {
     }
     #[inline]
     unsafe fn unsafe_get_pixel(&self, x: u32, y: u32) -> Self::Pixel {
-        Bit::from(self.buffer.get_unchecked((y * self.width + x) as usize))
+        unsafe {
+            Bit::from(self.buffer.get_unchecked((y * self.width + x) as usize))
+        }
     }
 }
 
@@ -121,7 +123,7 @@ impl GenericImage for BinaryImage {
         self.buffer.set((y * self.width + x) as usize, *pixel);
     }
     fn blend_pixel(&mut self, x: u32, y: u32, other: Self::Pixel) {
-        let mut pixel = self.get_pixel(x, y);
+        let pixel = self.get_pixel(x, y);
         self.put_pixel(x, y, pixel | other);
     }
 }
@@ -189,7 +191,9 @@ where
     }
     #[inline]
     unsafe fn unsafe_get_pixel(&self, x: u32, y: u32) -> Self::Pixel {
-        Bit::from(self.deref().unsafe_get_pixel(x, y))
+        unsafe {
+            Bit::from(self.deref().unsafe_get_pixel(x, y))
+        }
     }
 }
 

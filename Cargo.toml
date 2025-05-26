@@ -2,6 +2,12 @@
 name = "mimesis"
 version = "0.1.0"
 edition = "2024"
+authors = ["Florent Veilly"]
+description = "Generate 3D meshes from images using contour tracing and polygon extrusion."
+license-file = "LICENSE"
+keywords = ["mesh", "graphics", "earcut", "contour-tracing", "polygon"]
+readme = "README.md"
+repository = "https://github.com/fveilly/mimesis"
 
 [workspace]
 members = ["bin"]
