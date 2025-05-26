@@ -93,6 +93,16 @@ impl Mesh3D {
 
         Ok(())
     }
+    
+    #[inline]
+    pub fn get_vertices(&self) -> &Vec<[f64; 3]> {
+        &self.vertices
+    }
+    
+    #[inline]
+    pub fn get_faces(&self) -> &Vec<MeshGroup> {
+        &self.faces
+    }
 }
 
 impl Mesh3D {
@@ -247,6 +257,14 @@ impl Mesh2D {
                 MeshGroup { indices: side_indices, name: "side" },
             ],
         }
+    }
+    
+    pub fn get_vertices(&self) -> &Vec<[f64; 2]> {
+        &self.vertices
+    }
+    
+    pub fn get_indices(&self) -> &Vec<usize> {
+        &self.indices
     }
 }
 

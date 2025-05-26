@@ -8,23 +8,27 @@ use mimesis::{BinaryImage, error::Error};
 use mimesis::draw::DrawMesh;
 use mimesis::mesh::PolygonMesh;
 use crate::config::{Config, MaskMethod};
+use crate::stats::{Benchmark, MeshStats, ProcessingResult};
 
 pub(crate) struct Processor {
     config: Config
 }
 
 impl Processor {
-    
+
     pub(crate) fn new(config: Config) -> Self {
         Processor {
             config
         }
     }
-    pub(crate) fn process(&self, input: &PathBuf, mask: Option<&Path>) -> Result<usize, Error> {
+    pub(crate) fn process(&self, input: &PathBuf, mask: Option<&Path>) -> Result<ProcessingResult, Error> {
+        let mut benchmarks = Benchmark::now();
         let verbose = self.config.processing.verbose;
 
+        // Step 1: Load texture image
         let texture_image = image::open(input)
             .map_err(|e| Error::Custom(format!("Failed to open texture image: {}", e)))?;
+        benchmarks.step( "Load texture image");
 
         let (width, height) = texture_image.dimensions();
         let asset_name = input.file_stem()
@@ -32,10 +36,12 @@ impl Processor {
             .to_string_lossy();
 
         if verbose {
+            println!("==================================================================================");
             println!("Processing: {} ({}x{} pixels)", input.display(), width, height);
+            println!("==================================================================================");
         }
 
-        // Create or load binary mask
+        // Step 2: Create or load binary mask
         let binary = if let Some(mask_path) = mask {
             if verbose {
                 println!("Loading mask from: {}", mask_path.display());
@@ -49,8 +55,9 @@ impl Processor {
             }
             Self::generate_binary_mask(&texture_image, &self.config.processing.mask_method, self.config.processing.threshold)
         };
+        benchmarks.step( "Generate/load mask");
 
-        // Create output directory
+        // Step 3: Setup output directories and save textures
         let file_output_dir = self.config.output.output_folder.to_path_buf();
         let textures_output_dir = file_output_dir.join("textures");
 
@@ -80,8 +87,9 @@ impl Processor {
         } else {
             front_texture_filename.clone()
         };
+        benchmarks.step( "Save front and back textures");
 
-        // Save binary mask visualization
+        // Step 4: Save binary mask visualization
         if !self.config.output.skip_intermediates {
             let visual = ImageBuffer::from_fn(binary.width(), binary.height(), |x, y| {
                 let pixel = binary.get_pixel(x, y);
@@ -95,26 +103,29 @@ impl Processor {
             let mask_path = file_output_dir.join(format!("{}_mask.png", asset_name));
             Self::save_uncompressed_png(&mask_path, &DynamicImage::ImageLuma8(visual))
                 .map_err(|e| Error::Custom(format!("Failed to save mask: {}", e)))?;
+            benchmarks.step( "Save mask visualization");
         }
 
-        // Convert binary mask to polygons
+        // Step 5: Convert binary mask to polygons
         let polygons: Vec<Polygon> = binary.trace_polygons(self.config.processing.min_polygon_dimension);
+        benchmarks.step( "Trace polygons");
 
         if verbose {
             println!("Found {} polygons for {}", polygons.len(), asset_name);
         }
 
-        // Process polygons
-        for (i, polygon) in polygons.iter().enumerate() {
-            if !self.config.output.skip_intermediates {
+        // Step 6: Process polygon visualization
+        if !self.config.output.skip_intermediates {
+            for (i, polygon) in polygons.iter().enumerate() {
                 let result_img = polygon.draw(width, height);
                 let polygon_path = file_output_dir.join(format!("{}_polygon_{}.png", asset_name, i));
                 result_img.save(&polygon_path)
                     .map_err(|e| Error::Custom(format!("Failed to save polygon image: {}", e)))?;
             }
+            benchmarks.step( "Save polygon visualizations");
         }
 
-        // Simplify polygons
+        // Step 7: Simplify polygons
         let simplified_polygons: Vec<Polygon> = if self.config.processing.simplify_tolerance <= 0f64 {
             polygons
         }
@@ -126,8 +137,9 @@ impl Processor {
             }
             simplified_polygons
         };
+        benchmarks.step( "Simplify polygons");
 
-        // Smooth polygons
+        // Step 8: Smooth polygons
         let smooth_polygons: Vec<Polygon> = if self.config.processing.smooth_iterations <= 0 {
             simplified_polygons
         }
@@ -139,12 +151,18 @@ impl Processor {
             }
             smooth_polygons
         };
+        benchmarks.step( "Smooth polygons");
 
-        // Create meshes
+        // Step 9: Create meshes
+        let mut mesh_stats = Vec::new();
+
         for (i, polygon) in smooth_polygons.iter().enumerate() {
             // Create 2D mesh
             let mesh2d = polygon.mesh2d()
                 .map_err(|e| Error::Custom(format!("Failed to create 2D mesh for polygon {}: {}", i, e)))?;
+
+            let vertex_count_2d = mesh2d.get_vertices().len();
+            let triangle_count_2d = mesh2d.get_indices().len() / 3;
 
             if !self.config.output.skip_intermediates {
                 let mesh2d_path = file_output_dir.join(format!("{}_{}.2d.obj", asset_name, i));
@@ -154,6 +172,9 @@ impl Processor {
 
             // Create 3D mesh
             let mesh3d = mesh2d.extrude(self.config.processing.extrude_height, width as f64, height as f64);
+            let vertex_count_3d = mesh3d.get_vertices().len();
+            let triangle_count_3d = mesh3d.get_faces().iter().map(|group| group.indices.len()).sum();
+
             let mesh_path = file_output_dir.join(format!("{}_{}.obj", asset_name, i));
             let material_path = file_output_dir.join(format!("{}_{}.mtl", asset_name, i));
 
@@ -164,9 +185,36 @@ impl Processor {
                 &back_texture_filename,
                 &side_texture_filename
             ).map_err(|e| Error::Custom(format!("Failed to export 3D mesh: {}", e)))?;
+
+            mesh_stats.push(MeshStats {
+                vertex_count_2d,
+                triangle_count_2d,
+                vertex_count_3d,
+                triangle_count_3d,
+            });
+
+            if verbose {
+                println!("Mesh {}: 2D({} vertices, {} triangles) -> 3D({} vertices, {} triangles)",
+                         i, vertex_count_2d, triangle_count_2d, vertex_count_3d, triangle_count_3d);
+            }
+        }
+        benchmarks.step( "Generate meshes");
+
+        let total_duration = benchmarks.get_total_duration();
+
+        if verbose {
+            println!("Total processing time: {:.2}s", total_duration.as_secs_f64());
+            for benchmark in benchmarks.get_steps() {
+                println!("  {}: {:.2}s", benchmark.name, benchmark.duration.as_secs_f64());
+            }
         }
 
-        Ok(smooth_polygons.len())
+        Ok(ProcessingResult {
+            polygon_count: smooth_polygons.len(),
+            mesh_stats,
+            benchmarks,
+            total_duration,
+        })
     }
 
     fn generate_binary_mask(image: &DynamicImage, method: &MaskMethod, threshold: u8) -> BinaryImage {

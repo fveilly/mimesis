@@ -256,20 +256,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         match processor.process(&input_file, mask.as_deref()) {
-            Ok(polygon_count) => {
-                stats.processed += 1;
-                stats.total_polygons += polygon_count;
+            Ok(result) => {
+                stats.total_polygons += result.polygon_count;
                 if config.processing.verbose {
                     println!("Successfully processed: {} ({} polygons)",
-                             input_file.display(), polygon_count);
+                             input_file.display(), result.polygon_count);
                 }
+                stats.add_result(result);
             }
             Err(e) => {
-                stats.failed += 1;
                 eprintln!("Failed to process {}: {}", input_file.display(), e);
                 if !config.batch.continue_on_error {
                     return Err(e.into());
                 }
+                stats.add_failure()
             }
         }
 
