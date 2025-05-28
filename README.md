@@ -164,18 +164,19 @@ input/
   --back-texture metal_texture.jpg
 ```
 
-### Background removal
+## Background removal
 
 This feature allows you to run background removal on images using the RMBG-1.4 model.
 
-#### Model
+### Model
 
 - Download the ONNX model here:  
   [`RMBG-1.4.onnx`](https://huggingface.co/briaai/RMBG-1.4/blob/main/onnx/model.onnx)
 
-#### Usage
+### Usage
 
-1. **Set the ONNX Runtime library path** using the ORT_LIB_LOCATION environment variable:
+1. **Set the ONNX Runtime library path** using the ORT_LIB_LOCATION environment variable.
+
 Refer to this [`guide`](https://ort.pyke.io/setup/linking) for details.
 
 Example (Windows):
