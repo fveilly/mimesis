@@ -3,7 +3,6 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 use earcutr::earcut;
 use geo::Polygon;
-use crate::error::Error;
 
 #[derive(Debug, Clone)]
 pub struct MeshGroup {
@@ -269,12 +268,12 @@ impl Mesh2D {
 }
 
 pub trait PolygonMesh {
-    fn mesh2d(&self) -> Result<Mesh2D, Error>;
+    fn mesh2d(&self) -> anyhow::Result<Mesh2D>;
 }
 
 impl PolygonMesh for Polygon {
 
-    fn mesh2d(&self) -> Result<Mesh2D, Error> {
+    fn mesh2d(&self) -> anyhow::Result<Mesh2D> {
         let mut vertices: Vec<[f64; 2]> = Vec::new();
         let mut coords: Vec<f64> = Vec::new();
         let mut holes: Vec<usize> = Vec::new();

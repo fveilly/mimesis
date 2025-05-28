@@ -47,6 +47,14 @@ pub(crate) struct InputConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ProcessingConfig {
+    /// Enable ONNX-based background removal
+    #[cfg(feature = "background-remover")]
+    #[serde(default)]
+    pub use_onnx_background_removal: bool,
+    #[cfg(feature = "background-remover")]
+    #[serde(default)]
+    /// Path to the ONNX model file for background removal
+    pub onnx_model_path: Option<PathBuf>,
     /// Simplification tolerance for Ramer-Douglas-Peucker algorithm
     #[serde(default)]
     pub simplify_tolerance: f64,
@@ -68,6 +76,9 @@ pub(crate) struct ProcessingConfig {
     /// Enable verbose output
     #[serde(default)]
     pub verbose: bool,
+    /// Enable benchmark output
+    #[serde(default)]
+    pub benchmark: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,13 +121,18 @@ impl Default for Config {
                 mask: None,
             },
             processing: ProcessingConfig {
+                #[cfg(feature = "background-remover")]
+                use_onnx_background_removal: false,
+                #[cfg(feature = "background-remover")]
+                onnx_model_path: None,
                 simplify_tolerance: 10.0,
                 smooth_iterations: 1,
                 extrude_height: 20.0,
                 min_polygon_dimension: 0,
                 threshold: 128,
                 mask_method: MaskMethod::Alpha,
-                verbose: false
+                verbose: false,
+                benchmark: false
             },
             batch: BatchConfig {
                 include_patterns: vec![
@@ -142,7 +158,7 @@ impl Default for Config {
 }
 
 impl Config {
-    
+
     pub fn load(config_path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
         let config_str = fs::read_to_string(config_path)?;
         let config: Config = match config_path.extension().and_then(|s| s.to_str()) {
@@ -152,7 +168,7 @@ impl Config {
         };
         Ok(config)
     }
-    
+
     pub fn save_default(config_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let config = Config::default();
         let config_str = match config_path.extension().and_then(|s| s.to_str()) {
@@ -166,5 +182,5 @@ impl Config {
         println!("Generated default configuration file: {}", config_path.display());
         Ok(())
     }
-    
+
 }

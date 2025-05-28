@@ -1,14 +1,18 @@
 use std::fs;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use anyhow::anyhow;
 use geo::{ChaikinSmoothing, Polygon, Simplify};
 use image::{DynamicImage, ExtendedColorType, GenericImageView, ImageBuffer, ImageEncoder, ImageResult, Luma};
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use mimesis::{BinaryImage, error::Error};
+use mimesis::{BinaryImage};
 use mimesis::draw::DrawMesh;
 use mimesis::mesh::PolygonMesh;
 use crate::config::{Config, MaskMethod};
 use crate::stats::{Benchmark, MeshStats, ProcessingResult};
+
+#[cfg(feature = "background-remover")]
+use mimesis::BackgroundRemover;
 
 pub(crate) struct Processor {
     config: Config
@@ -21,38 +25,48 @@ impl Processor {
             config
         }
     }
-    pub(crate) fn process(&self, input: &PathBuf, mask: Option<&Path>) -> Result<ProcessingResult, Error> {
+    
+    #[cfg(feature = "background-remover")]
+    #[inline]
+    fn background_removal_feature_supported() -> bool {
+        return self.config.processing.use_onnx_background_removal
+    }
+    #[cfg(not(feature = "background-remover"))]
+    #[inline]
+    fn background_removal_feature_supported() -> bool {
+        false
+    }
+
+    pub(crate) fn process(&self, input: &PathBuf, mask: Option<&Path>) -> anyhow::Result<ProcessingResult> {
         let mut benchmarks = Benchmark::now();
-        let verbose = self.config.processing.verbose;
 
         // Step 1: Load texture image
         let texture_image = image::open(input)
-            .map_err(|e| Error::Custom(format!("Failed to open texture image: {}", e)))?;
+            .map_err(|e| anyhow!(format!("Failed to open texture image: {}", e)))?;
         benchmarks.step( "Load texture image");
 
         let (width, height) = texture_image.dimensions();
         let asset_name = input.file_stem()
-            .ok_or("Invalid texture filename")?
+            .ok_or(anyhow!("Invalid texture filename"))?
             .to_string_lossy();
-
-        if verbose {
-            println!("==================================================================================");
-            println!("Processing: {} ({}x{} pixels)", input.display(), width, height);
-            println!("==================================================================================");
-        }
 
         // Step 2: Create or load binary mask
         let binary = if let Some(mask_path) = mask {
-            if verbose {
-                println!("Loading mask from: {}", mask_path.display());
-            }
             let mask_image = image::open(mask_path)
-                .map_err(|e| Error::Custom(format!("Failed to open mask image: {}", e)))?;
+                .map_err(|e| anyhow!(format!("Failed to open mask image: {}", e)))?;
             BinaryImage::from_mask(mask_image.to_luma8())
-        } else {
-            if verbose {
-                println!("Generating mask using {:?} method", self.config.processing.mask_method);
+        } else if Self::background_removal_feature_supported() {
+            #[cfg(feature = "background-remover")]
+            if let Some(onnx_model_path) = &self.config.processing.onnx_model_path {
+                let background_remover = BackgroundRemover::new(onnx_model_path)?;
+                background_remover.remove_background(&texture_image)
+                    .map_err(|e| anyhow!(format!("Failed to remove background with ONNX: {}", e)))?
+            } else {
+                return Err(anyhow!("ONNX background removal enabled but no model path provided"));
             }
+            #[cfg(not(feature = "background-remover"))]
+            unreachable!()
+        } else {
             Self::generate_binary_mask(&texture_image, &self.config.processing.mask_method, self.config.processing.threshold)
         };
         benchmarks.step( "Generate/load mask");
@@ -62,18 +76,18 @@ impl Processor {
         let textures_output_dir = file_output_dir.join("textures");
 
         fs::create_dir_all(&textures_output_dir)
-            .map_err(|e| Error::Custom(format!("Failed to create output directory: {}", e)))?;
+            .map_err(|e| anyhow!(format!("Failed to create output directory: {}", e)))?;
 
         // Save original texture image
         let front_texture_filename = format!("{}.png", asset_name);
         let texture_path = textures_output_dir.join(&front_texture_filename);
         Self::save_uncompressed_png(&texture_path, &texture_image)
-            .map_err(|e| Error::Custom(format!("Failed to save texture: {}", e)))?;
+            .map_err(|e| anyhow!(format!("Failed to save texture: {}", e)))?;
 
         let side_texture_filename = if let Some(side_texture_path) = &self.config.output.side_texture {
             let filename = "side.png".to_string();
             fs::copy(&side_texture_path, textures_output_dir.join(&filename))
-                .map_err(|e| Error::Custom(format!("Failed to copy side texture: {}", e)))?;
+                .map_err(|e| anyhow!(format!("Failed to copy side texture: {}", e)))?;
             filename
         } else {
             front_texture_filename.clone()
@@ -82,7 +96,7 @@ impl Processor {
         let back_texture_filename = if let Some(back_texture_path) = &self.config.output.back_texture {
             let filename = "back.png".to_string();
             fs::copy(&back_texture_path, textures_output_dir.join(&filename))
-                .map_err(|e| Error::Custom(format!("Failed to copy back texture: {}", e)))?;
+                .map_err(|e| anyhow!(format!("Failed to copy back texture: {}", e)))?;
             filename
         } else {
             front_texture_filename.clone()
@@ -102,7 +116,7 @@ impl Processor {
 
             let mask_path = file_output_dir.join(format!("{}_mask.png", asset_name));
             Self::save_uncompressed_png(&mask_path, &DynamicImage::ImageLuma8(visual))
-                .map_err(|e| Error::Custom(format!("Failed to save mask: {}", e)))?;
+                .map_err(|e| anyhow!(format!("Failed to save mask: {}", e)))?;
             benchmarks.step( "Save mask visualization");
         }
 
@@ -110,17 +124,13 @@ impl Processor {
         let polygons: Vec<Polygon> = binary.trace_polygons(self.config.processing.min_polygon_dimension);
         benchmarks.step( "Trace polygons");
 
-        if verbose {
-            println!("Found {} polygons for {}", polygons.len(), asset_name);
-        }
-
         // Step 6: Process polygon visualization
         if !self.config.output.skip_intermediates {
             for (i, polygon) in polygons.iter().enumerate() {
                 let result_img = polygon.draw(width, height);
                 let polygon_path = file_output_dir.join(format!("{}_polygon_{}.png", asset_name, i));
                 result_img.save(&polygon_path)
-                    .map_err(|e| Error::Custom(format!("Failed to save polygon image: {}", e)))?;
+                    .map_err(|e| anyhow!(format!("Failed to save polygon image: {}", e)))?;
             }
             benchmarks.step( "Save polygon visualizations");
         }
@@ -159,7 +169,7 @@ impl Processor {
         for (i, polygon) in smooth_polygons.iter().enumerate() {
             // Create 2D mesh
             let mesh2d = polygon.mesh2d()
-                .map_err(|e| Error::Custom(format!("Failed to create 2D mesh for polygon {}: {}", i, e)))?;
+                .map_err(|e| anyhow!(format!("Failed to create 2D mesh for polygon {}: {}", i, e)))?;
 
             let vertex_count_2d = mesh2d.get_vertices().len();
             let triangle_count_2d = mesh2d.get_indices().len() / 3;
@@ -167,7 +177,7 @@ impl Processor {
             if !self.config.output.skip_intermediates {
                 let mesh2d_path = file_output_dir.join(format!("{}_{}.2d.obj", asset_name, i));
                 mesh2d.export_obj(mesh2d_path.as_path())
-                    .map_err(|e| Error::Custom(format!("Failed to export 2D mesh: {}", e)))?;
+                    .map_err(|e| anyhow!(format!("Failed to export 2D mesh: {}", e)))?;
             }
 
             // Create 3D mesh
@@ -184,7 +194,7 @@ impl Processor {
                 &front_texture_filename,
                 &back_texture_filename,
                 &side_texture_filename
-            ).map_err(|e| Error::Custom(format!("Failed to export 3D mesh: {}", e)))?;
+            ).map_err(|e| anyhow!(format!("Failed to export 3D mesh: {}", e)))?;
 
             mesh_stats.push(MeshStats {
                 vertex_count_2d,
@@ -192,24 +202,14 @@ impl Processor {
                 vertex_count_3d,
                 triangle_count_3d,
             });
-
-            if verbose {
-                println!("Mesh {}: 2D({} vertices, {} triangles) -> 3D({} vertices, {} triangles)",
-                         i, vertex_count_2d, triangle_count_2d, vertex_count_3d, triangle_count_3d);
-            }
         }
         benchmarks.step( "Generate meshes");
 
         let total_duration = benchmarks.get_total_duration();
 
-        if verbose {
-            println!("Total processing time: {:.2}s", total_duration.as_secs_f64());
-            for benchmark in benchmarks.get_steps() {
-                println!("  {}: {:.2}s", benchmark.name, benchmark.duration.as_secs_f64());
-            }
-        }
-
         Ok(ProcessingResult {
+            input: input.to_path_buf(), 
+            width, height,
             polygon_count: smooth_polygons.len(),
             mesh_stats,
             benchmarks,

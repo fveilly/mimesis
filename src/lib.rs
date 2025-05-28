@@ -3,15 +3,9 @@ mod contour;
 mod pixel;
 pub mod mesh;
 pub mod draw;
-pub mod error;
+#[cfg(feature = "background-remover")]
+mod background_remover;
 
 pub use crate::binary_image::BinaryImage;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-    }
-}
+#[cfg(feature = "background-remover")]
+pub use crate::background_remover::BackgroundRemover;

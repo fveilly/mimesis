@@ -4,10 +4,13 @@ mod stats;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use clap::Parser;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use rayon::ThreadPoolBuilder;
 use crate::config::{Config, MaskMethod};
 use crate::processing::Processor;
-use crate::stats::ProcessingStats;
+use crate::stats::{ProcessingStats};
 
 #[derive(Parser)]
 #[command(name = "mesh-generator")]
@@ -89,6 +92,10 @@ struct Args {
     /// Verbose output
     #[arg(long)]
     verbose: bool,
+
+    /// Benchmark output
+    #[arg(long)]
+    benchmark: bool,
 }
 
 fn matches_patterns(filename: &str, patterns: &[String]) -> bool {
@@ -181,6 +188,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.verbose {
         config.processing.verbose = true;
     }
+    if args.benchmark {
+        config.processing.benchmark = true;
+    }
     if let Some(workers) = args.workers {
         config.batch.workers = workers;
     }
@@ -223,17 +233,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let batch = config.input.input.is_dir();
 
     if config.processing.verbose {
-        println!("Found {} input files", input_files.len());
-        for file in &input_files {
-            println!("  - {}", file.display());
+        let file_count = input_files.len();
+
+        // Header with file count
+        println!("\n{}", "─".repeat(60));
+        println!("📁 Found {} input file{}",
+                 file_count,
+                 if file_count == 1 { "" } else { "s" });
+        println!("{}", "─".repeat(60));
+
+        if file_count <= 20 {
+            // Show all files if reasonable count
+            for (index, file) in input_files.iter().enumerate() {
+                println!("  {:>2}. {}",
+                         index + 1,
+                         file.display());
+            }
+        } else {
+            // Show first few, last few, and summary for large lists
+            let show_count = 5;
+
+            // First files
+            for (index, file) in input_files.iter().take(show_count).enumerate() {
+                let file_name = file.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown");
+                println!("  {:>2}. {}", index + 1, file_name);
+            }
+
+            // Ellipsis
+            println!("  ... ({} more files) ...", file_count - (show_count * 2));
+
+            // Last files
+            for (index, file) in input_files.iter().skip(file_count - show_count).enumerate() {
+                let file_name = file.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown");
+                println!("  {:>2}. {}",
+                         file_count - show_count + index + 1,
+                         file_name);
+            }
         }
     }
-
     // Create output directory
     fs::create_dir_all(&config.output.output_folder)
         .map_err(|e| format!("Failed to create output directory: {}", e))?;
-
-    let mut stats = ProcessingStats::new(input_files.len());
 
     // Process files
     if config.batch.workers > 1 {
@@ -242,49 +286,74 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let processor = Processor::new(config.clone());
-
-    // Sequential processing
-    for input_file in &input_files {
-        let mask = if batch {
-            let stem = input_file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            let mask_filename = format!("{}_mask.png", stem);
-            let mask_path = input_file.with_file_name(mask_filename);
-            if !mask_path.exists() { None } else { Some(mask_path) }
-        }
-        else {
-            config.input.mask.clone()
-        };
-
-        match processor.process(&input_file, mask.as_deref()) {
-            Ok(result) => {
-                stats.total_polygons += result.polygon_count;
-                if config.processing.verbose {
-                    println!("Successfully processed: {} ({} polygons)",
-                             input_file.display(), result.polygon_count);
-                }
-                stats.add_result(result);
-            }
-            Err(e) => {
-                eprintln!("Failed to process {}: {}", input_file.display(), e);
-                if !config.batch.continue_on_error {
-                    return Err(e.into());
-                }
-                stats.add_failure()
-            }
-        }
-
-        if config.processing.verbose && input_files.len() > 1 {
-            stats.print_progress();
-        }
-    }
-
-    // Print final summary
-    if input_files.len() > 1 {
-        stats.print_summary();
+    let pool = if config.batch.workers > 0 {
+        ThreadPoolBuilder::new()
+            .num_threads(config.batch.workers)
+            .build()
+            .map_err(|e| format!("Failed to create thread pool: {}", e))?
     } else {
-        println!("Successfully generated {} meshes in: {}",
-                 stats.total_polygons, config.output.output_folder.display());
+        ThreadPoolBuilder::new()
+            .build()
+            .map_err(|e| format!("Failed to create thread pool: {}", e))?
+    };
+
+    let stats_mutex = Arc::new(Mutex::new(ProcessingStats::new(input_files.len())));
+    let continue_on_error = config.batch.continue_on_error;
+    let verbose = config.processing.verbose;
+
+    pool.install(|| {
+        input_files
+            .par_iter()
+            .try_for_each(|input_file| -> anyhow::Result<()> {
+                let mask = if batch {
+                    let stem = input_file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    let mask_filename = format!("{}_mask.png", stem);
+                    let mask_path = input_file.with_file_name(mask_filename);
+                    if !mask_path.exists() { None } else { Some(mask_path) }
+                } else {
+                    config.input.mask.clone()
+                };
+
+                match processor.process(input_file, mask.as_deref()) {
+                    Ok(result) => {
+                        let mut stats_guard = stats_mutex.lock().unwrap();
+                        stats_guard.add_result(result.clone());
+
+                        if verbose {
+                            result.print_success_detailed(config.processing.benchmark, true);
+                        }
+                        else {
+                            result.print_success_compact()
+                        }
+                        stats_guard.print_progress();
+
+                        Ok(())
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to process {}: {}", input_file.display(), e);
+
+                        let mut stats_guard = stats_mutex.lock().unwrap();
+                        stats_guard.add_failure();
+
+                        if continue_on_error {
+                            Ok(())
+                        } else {
+                            Err(e)
+                        }
+                    }
+                }
+            })
+    })?;
+    
+    let stats = stats_mutex.lock().unwrap();
+    if config.processing.verbose {
+        stats.print_summary_full(config.processing.benchmark, true);
     }
+    else {
+        stats.print_summary(config.processing.benchmark, true);
+    }
+
+    stats.print_status_line();
 
     Ok(())
 }
