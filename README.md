@@ -4,6 +4,7 @@ Generate 3D meshes from images using contour tracing and polygon extrusion.
 
 ## ✨ Features
 
+- Remove background using the RMBG-1.4 model
 - Extracts binary mask from an image based on the **alpha channel**
 - Detects **polygon contours** using **Theo Pavlidis' contour tracing algorithm**
 - Smooths and simplifies the polygon
@@ -175,14 +176,14 @@ This feature allows you to run background removal on images using the RMBG-1.4 m
 
 ### Usage
 
-1. **Set the ONNX Runtime library path** using the ORT_LIB_LOCATION environment variable.
-
-Refer to this [`guide`](https://ort.pyke.io/setup/linking) for details.
+1. **Set the ONNX Runtime library path** using the ORT_LIB_LOCATION environment variable:
 
 Example (Windows):
 ```bash
 set ORT_LIB_LOCATION=C:\path\to\onnxruntime.dll
 ```
+
+Refer to this [`guide`](https://ort.pyke.io/setup/linking) for details.
 
 2. **Enable the feature** in your Cargo run command:
 
