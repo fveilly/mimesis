@@ -64,6 +64,8 @@ Use configuration file:
 - `-c, --config <PATH>` - Configuration file path
 
 ### Processing Parameters
+- `--onnx-background-removal` - Enable ONNX background removal
+- `--onnx-model-path` - Path to the ONXX model
 - `--simplify-tolerance <FLOAT>` - Polygon simplification tolerance (default: 10.0)
 - `--smooth-iterations <INT>` - Number of smoothing iterations (default: 1)
 - `--extrude-height <FLOAT>` - 3D extrusion height (default: 20.0)
@@ -85,6 +87,7 @@ Use configuration file:
 ### Other
 - `--generate-config` - Generate default config file and exit
 - `-v, --verbose` - Verbose output
+- `--benchmark` - Benchmark output
 
 ## Mask Generation Methods
 
@@ -159,6 +162,31 @@ input/
   -o output/ \
   --side-texture wood_texture.jpg \
   --back-texture metal_texture.jpg
+```
+
+### Background removal
+
+This feature allows you to run background removal on images using the RMBG-1.4 model.
+
+#### Model
+
+- Download the ONNX model here:  
+  [`RMBG-1.4.onnx`](https://huggingface.co/briaai/RMBG-1.4/blob/main/onnx/model.onnx)
+
+#### Usage
+
+1. **Set the ONNX Runtime library path** using the ORT_LIB_LOCATION environment variable:
+Refer to this [`guide`](https://ort.pyke.io/setup/linking) for details.
+
+Example (Windows):
+```bash
+set ORT_LIB_LOCATION=C:\path\to\onnxruntime.dll
+```
+
+2. **Enable the feature** in your Cargo run command:
+
+```bash
+cargo run --features background-remover
 ```
 
 ## Supported Formats

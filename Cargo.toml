@@ -19,7 +19,7 @@ num-traits = "0.2.19"
 geo = "0.30.0"
 earcutr = "0.4.3"
 imageproc = "0.25.0"
-ort = { version = "2.0.0-rc.1", default-features = false, features = ["ndarray"], optional = true }
+ort = { version = "2.0.0-rc.1", default-features = false, features = ["ndarray", "load-dynamic"], optional = true }
 ndarray = { version = "0.16.1", optional = true}
 fast_image_resize =  { version = "5.1.4", optional = true}
 anyhow = "1.0.98"

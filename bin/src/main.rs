@@ -17,6 +17,14 @@ use crate::stats::{ProcessingStats};
 #[command(about = "Generate 3D meshes from images using contour tracing")]
 #[command(version = "1.0")]
 struct Args {
+    /// Enable ONNX-based background removal
+    #[cfg(feature = "background-remover")]
+    pub onnx_background_removal: Option<bool>,
+
+    #[cfg(feature = "background-remover")]
+    /// Path to the ONNX model file for background removal
+    pub onnx_model_path: Option<PathBuf>,
+
     /// Input texture image path or directory for batch processing
     #[arg(short, long)]
     input: Option<PathBuf>,
@@ -172,6 +180,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if args.mask.is_some() {
         config.input.mask = args.mask;
+    }
+    #[cfg(feature = "background-remover")]
+    if let Some(onnx_background_removal) = args.onnx_background_removal {
+        config.processing.use_onnx_background_removal = onnx_background_removal;
+    }
+    #[cfg(feature = "background-remover")]
+    if let Some(onnx_model_path) = args.onnx_model_path {
+        config.processing.onnx_model_path = Some(onnx_model_path);
     }
     if let Some(simplify_tolerance) = args.simplify_tolerance {
         config.processing.simplify_tolerance = simplify_tolerance;
