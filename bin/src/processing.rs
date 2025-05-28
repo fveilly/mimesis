@@ -25,15 +25,15 @@ impl Processor {
             config
         }
     }
-    
+
     #[cfg(feature = "background-remover")]
     #[inline]
-    fn background_removal_feature_supported() -> bool {
+    fn background_removal_feature_supported(&self) -> bool {
         return self.config.processing.use_onnx_background_removal
     }
     #[cfg(not(feature = "background-remover"))]
     #[inline]
-    fn background_removal_feature_supported() -> bool {
+    fn background_removal_feature_supported(&self) -> bool {
         false
     }
 
@@ -55,7 +55,7 @@ impl Processor {
             let mask_image = image::open(mask_path)
                 .map_err(|e| anyhow!(format!("Failed to open mask image: {}", e)))?;
             BinaryImage::from_mask(mask_image.to_luma8())
-        } else if Self::background_removal_feature_supported() {
+        } else if self.background_removal_feature_supported() {
             #[cfg(feature = "background-remover")]
             if let Some(onnx_model_path) = &self.config.processing.onnx_model_path {
                 let background_remover = BackgroundRemover::new(onnx_model_path)?;
